@@ -1,0 +1,41 @@
+# ============================================
+# EMAIL CONFIGURATION
+# ============================================
+# Copy this file to .env and replace with your actual email credentials
+
+# SMTP Configuration for Gmail
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+
+# Your Gmail address
+SMTP_USER=your-email@gmail.com
+
+# Your Gmail App Password (NOT your regular password!)
+# Get it from: https://myaccount.google.com/apppasswords
+SMTP_PASS=your-16-character-app-password
+
+# Sender email (usually same as SMTP_USER)
+EMAIL_FROM=your-email@gmail.com
+
+# Sender name (what recipients will see)
+EMAIL_FROM_NAME=Consultare Leave Management
+
+# ============================================
+# DATABASE CONFIGURATION (if needed)
+# ============================================
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=leave_management
+DB_USER=postgres
+DB_PASSWORD=your-db-password
+
+# ============================================
+# JWT SECRET (if needed)
+# ============================================
+JWT_SECRET=your-secret-key
+
+
+
+
+
