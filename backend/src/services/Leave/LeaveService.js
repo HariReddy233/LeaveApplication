@@ -89,6 +89,21 @@ export const CreateLeaveService = async (Request) => {
 
   const leave = result.rows[0];
 
+  // If Admin applies leave, update balance immediately (since it's auto-approved)
+  if (isAdmin && finalStatus === 'Approved') {
+    const year = new Date(leave.start_date).getFullYear();
+    await database.query(
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+       VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
+       ON CONFLICT (employee_id, leave_type, year) 
+       DO UPDATE SET 
+         used_balance = leave_balance.used_balance + $4,
+         updated_at = NOW()`,
+      [leave.employee_id, leave.leave_type, year, leave.number_of_days]
+    );
+    console.log(`✅ Admin leave balance updated immediately for ${leave.leave_type} (${leave.number_of_days} days)`);
+  }
+
   // Check email configuration before attempting to send
   const emailConfigured = process.env.SMTP_USER && process.env.SMTP_PASS;
   if (!emailConfigured) {
@@ -990,17 +1005,17 @@ export const ApproveLeaveHodService = async (Request) => {
     [finalStatus, id]
   );
 
-  // If approved, update leave balance (when at least one approval exists: HOD OR Admin)
-  // Update balance if this is the first approval (to avoid double deduction)
-  const wasHodApproved = leave.hod_status === 'Approved';
-  const wasAdminApproved = leave.admin_status === 'Approved';
-  const isFirstApproval = !wasHodApproved && !wasAdminApproved && (hodStatus === 'Approved' || adminStatus === 'Approved');
+  // Update leave balance ONLY when leave is FULLY approved (both HOD and Admin approve)
+  // Check if this action makes the leave fully approved
+  const wasFullyApproved = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved');
+  const isNowFullyApproved = (hodStatus === 'Approved' && adminStatus === 'Approved');
   
-  if (isFirstApproval && (hodStatus === 'Approved' || adminStatus === 'Approved')) {
+  // Only update balance if it becomes fully approved now (wasn't before)
+  if (!wasFullyApproved && isNowFullyApproved) {
     const year = new Date(leave.start_date).getFullYear();
     
     // Update or insert leave balance
-    // When a leave is approved, deduct the days from remaining balance
+    // When a leave is fully approved, deduct the days from remaining balance
     await database.query(
       `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
        VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
@@ -1011,7 +1026,7 @@ export const ApproveLeaveHodService = async (Request) => {
       [leave.employee_id, leave.leave_type, year, leave.number_of_days]
     );
     
-    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days)`);
+    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - Fully approved`);
   }
 
   // Get approver name
@@ -1268,17 +1283,17 @@ export const ApproveLeaveAdminService = async (Request) => {
     [finalStatus, id]
   );
 
-  // If approved, update leave balance (when at least one approval exists: HOD OR Admin)
-  // Update balance if this is the first approval (to avoid double deduction)
-  const wasHodApproved = leave.hod_status === 'Approved';
-  const wasAdminApproved = leave.admin_status === 'Approved';
-  const isFirstApproval = !wasHodApproved && !wasAdminApproved && (hodStatus === 'Approved' || adminStatus === 'Approved');
+  // Update leave balance ONLY when leave is FULLY approved (both HOD and Admin approve)
+  // Check if this action makes the leave fully approved
+  const wasFullyApproved = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved');
+  const isNowFullyApproved = (hodStatus === 'Approved' && adminStatus === 'Approved');
   
-  if (isFirstApproval && (hodStatus === 'Approved' || adminStatus === 'Approved')) {
+  // Only update balance if it becomes fully approved now (wasn't before)
+  if (!wasFullyApproved && isNowFullyApproved) {
     const year = new Date(leave.start_date).getFullYear();
     
     // Update or insert leave balance
-    // When a leave is approved, deduct the days from remaining balance
+    // When a leave is fully approved, deduct the days from remaining balance
     await database.query(
       `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
        VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
@@ -1289,7 +1304,7 @@ export const ApproveLeaveAdminService = async (Request) => {
       [leave.employee_id, leave.leave_type, year, leave.number_of_days]
     );
     
-    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days)`);
+    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - Fully approved`);
   }
 
   // Get approver name
