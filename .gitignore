@@ -36,6 +36,12 @@ logs/
 *.sqlite
 *.db
 
+# Database migrations and SQL scripts (using same DB for local and server)
+backend/database/*.sql
+RUN_THESE_SQL_SCRIPTS.sql
+backend/database/README_SEED_DATA.md
+backend/database/RUN_THIS_MIGRATION.md
+
 # Temporary files
 tmp/
 temp/
