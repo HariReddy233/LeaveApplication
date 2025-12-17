@@ -233,18 +233,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <span>Calendar</span>
               </Link>
               
-              <Link
-                href="/dashboard/authorizations"
-                className={`flex items-center px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
-                  pathname === '/dashboard/authorizations'
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-700 hover:bg-gray-100'
-                }`}
-                style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
-              >
-                <UserCircle className={`w-5 h-5 mr-3 ${pathname === '/dashboard/authorizations' ? 'text-white' : 'text-gray-500'}`} />
-                <span>Authorizations</span>
-              </Link>
+              {/* Authorizations - Only for Admin and HOD */}
+              {(user?.role === 'admin' || user?.role === 'hod' || user?.role === 'HOD') && (
+                <Link
+                  href="/dashboard/authorizations"
+                  className={`flex items-center px-3 py-2.5 rounded-lg transition-colors text-sm font-medium ${
+                    pathname === '/dashboard/authorizations'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  }`}
+                  style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
+                >
+                  <UserCircle className={`w-5 h-5 mr-3 ${pathname === '/dashboard/authorizations' ? 'text-white' : 'text-gray-500'}`} />
+                  <span>Authorizations</span>
+                </Link>
+              )}
 
               {(user?.role === 'admin' || user?.role === 'Admin') && (
                 <Link

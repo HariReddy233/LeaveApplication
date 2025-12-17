@@ -24,16 +24,28 @@ export default function ApplyLeavePage() {
   const [leaveBalance, setLeaveBalance] = useState<any[]>([]);
   const [selectedLeaveBalance, setSelectedLeaveBalance] = useState<any>(null);
   const [balanceError, setBalanceError] = useState('');
+  const [overlapError, setOverlapError] = useState('');
+  const [blockedDates, setBlockedDates] = useState<string[]>([]);
 
   useEffect(() => {
     fetchLeaveTypes();
     if (!isUpdate) {
       fetchLeaveBalance();
+      fetchBlockedDates();
     }
     if (isUpdate) {
       fetchLeaveDetails();
     }
   }, [isUpdate, leaveId]);
+
+  // Check for overlapping dates when dates change
+  useEffect(() => {
+    if (formData.start_date && formData.end_date && !isUpdate) {
+      checkOverlappingDates();
+    } else {
+      setOverlapError('');
+    }
+  }, [formData.start_date, formData.end_date, isUpdate]);
 
   const fetchLeaveTypes = async () => {
     try {
@@ -95,6 +107,72 @@ export default function ApplyLeavePage() {
     }
   };
 
+  const fetchBlockedDates = async () => {
+    try {
+      // Fetch all pending/approved leaves to get blocked dates
+      const response = await api.get('/Leave/LeaveList/1/1000/0');
+      if (response.data?.Data) {
+        const leaves = response.data.Data;
+        const blocked: string[] = [];
+        
+        leaves.forEach((leave: any) => {
+          const hodStatus = (leave.HodStatus || leave.hod_status || 'Pending').toString().toLowerCase();
+          const adminStatus = (leave.AdminStatus || leave.admin_status || 'Pending').toString().toLowerCase();
+          
+          // Only block dates for pending or approved leaves
+          if ((hodStatus === 'pending' || hodStatus === 'approved') || 
+              (adminStatus === 'pending' || adminStatus === 'approved')) {
+            const startDate = new Date(leave.start_date || leave.StartDate);
+            const endDate = new Date(leave.end_date || leave.EndDate);
+            
+            // Add all dates in the range to blocked dates
+            const currentDate = new Date(startDate);
+            while (currentDate <= endDate) {
+              const dateStr = currentDate.toISOString().split('T')[0];
+              if (!blocked.includes(dateStr)) {
+                blocked.push(dateStr);
+              }
+              currentDate.setDate(currentDate.getDate() + 1);
+            }
+          }
+        });
+        
+        setBlockedDates(blocked);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch blocked dates:', err);
+    }
+  };
+
+  const checkOverlappingDates = async () => {
+    if (!formData.start_date || !formData.end_date) {
+      setOverlapError('');
+      return;
+    }
+
+    try {
+      const response = await api.post('/Leave/CheckOverlappingLeaves', {
+        start_date: formData.start_date,
+        end_date: formData.end_date,
+      });
+
+      if (response.data?.hasOverlap) {
+        const overlappingLeave = response.data.overlappingLeaves[0];
+        const status = overlappingLeave.hod_status === 'Approved' && overlappingLeave.admin_status === 'Approved' 
+          ? 'approved' 
+          : 'pending';
+        setOverlapError(
+          `You already have a ${overlappingLeave.leave_type} leave from ${new Date(overlappingLeave.start_date).toLocaleDateString()} to ${new Date(overlappingLeave.end_date).toLocaleDateString()} that is ${status}. Please select different dates.`
+        );
+      } else {
+        setOverlapError('');
+      }
+    } catch (err: any) {
+      console.error('Failed to check overlapping dates:', err);
+      // Don't show error if API fails, just log it
+    }
+  };
+
   const calculateDays = () => {
     if (formData.start_date && formData.end_date) {
       const start = new Date(formData.start_date);
@@ -123,7 +201,7 @@ export default function ApplyLeavePage() {
         const requestedDays = parseInt(formData.number_of_days) || 0;
         
         if (remaining <= 0) {
-          setBalanceError(`No remaining leave balance for ${formData.leave_type}. You have used all ${balance.total_balance || 0} days.`);
+          setBalanceError(`You have exhausted your ${formData.leave_type} balance. You have used all ${balance.total_balance || 0} days.`);
         } else if (requestedDays > remaining) {
           setBalanceError(`Insufficient leave balance. You have ${remaining} day(s) remaining, but requested ${requestedDays} day(s).`);
         } else {
@@ -131,6 +209,12 @@ export default function ApplyLeavePage() {
         }
       } else {
         setBalanceError(`No leave balance found for ${formData.leave_type}. Please contact HR.`);
+      }
+      
+      // Check if all leave types are exhausted
+      const allExhausted = leaveBalance.every((b: any) => (b.remaining_balance || 0) <= 0);
+      if (allExhausted && leaveBalance.length > 0) {
+        setBalanceError('All your leave types have been exhausted. You cannot apply for leave at this time.');
       }
     } else {
       setSelectedLeaveBalance(null);
@@ -143,6 +227,33 @@ export default function ApplyLeavePage() {
     setLoading(true);
     setError('');
     setBalanceError('');
+    setOverlapError('');
+
+    // Check for overlapping dates before submission
+    if (formData.start_date && formData.end_date) {
+      try {
+        const overlapResponse = await api.post('/Leave/CheckOverlappingLeaves', {
+          start_date: formData.start_date,
+          end_date: formData.end_date,
+          ...(isUpdate && leaveId ? { leave_id: leaveId } : {}),
+        });
+
+        if (overlapResponse.data?.hasOverlap) {
+          const overlappingLeave = overlapResponse.data.overlappingLeaves[0];
+          const status = overlappingLeave.hod_status === 'Approved' && overlappingLeave.admin_status === 'Approved' 
+            ? 'approved' 
+            : 'pending';
+          setOverlapError(
+            `You already have a ${overlappingLeave.leave_type} leave from ${new Date(overlappingLeave.start_date).toLocaleDateString()} to ${new Date(overlappingLeave.end_date).toLocaleDateString()} that is ${status}. Please select different dates.`
+          );
+          setLoading(false);
+          return;
+        }
+      } catch (err: any) {
+        console.error('Failed to check overlapping dates:', err);
+        // Continue with submission if check fails (backend will validate)
+      }
+    }
 
     // Validate leave balance before submission (only for new leaves, not updates)
     if (!isUpdate && formData.leave_type && selectedLeaveBalance) {
@@ -150,13 +261,23 @@ export default function ApplyLeavePage() {
       const requestedDays = parseInt(formData.number_of_days) || 0;
       
       if (remaining <= 0) {
-        setBalanceError(`Cannot apply for leave. You have no remaining balance for ${formData.leave_type}.`);
+        setBalanceError(`You have exhausted your ${formData.leave_type} balance. Cannot apply for this leave type.`);
         setLoading(false);
         return;
       }
       
       if (requestedDays > remaining) {
         setBalanceError(`Cannot apply for ${requestedDays} days. You only have ${remaining} day(s) remaining for ${formData.leave_type}.`);
+        setLoading(false);
+        return;
+      }
+    }
+    
+    // Check if all leave types are exhausted
+    if (!isUpdate && leaveBalance.length > 0) {
+      const allExhausted = leaveBalance.every((b: any) => (b.remaining_balance || 0) <= 0);
+      if (allExhausted) {
+        setBalanceError('All your leave types have been exhausted. You cannot apply for leave at this time.');
         setLoading(false);
         return;
       }
@@ -261,10 +382,10 @@ export default function ApplyLeavePage() {
                 )}
               </div>
 
-              {/* Number of Days */}
+              {/* Number of Days - Auto-calculated, Read-only */}
               <div>
                 <label htmlFor="number_of_days" className="block text-sm font-medium text-gray-700 mb-2">
-                  Number of Days <span className="text-red-500">*</span>
+                  Number of Days
                   {selectedLeaveBalance && (
                     <span className="ml-2 text-xs text-gray-500 font-normal">
                       (Max: {selectedLeaveBalance.remaining_balance || 0} days available)
@@ -275,25 +396,13 @@ export default function ApplyLeavePage() {
                   id="number_of_days"
                   type="number"
                   value={formData.number_of_days}
-                  onChange={(e) => {
-                    const days = e.target.value;
-                    setFormData({ ...formData, number_of_days: days });
-                  }}
-                  required
-                  min={1}
-                  max={selectedLeaveBalance?.remaining_balance || undefined}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
-                    selectedLeaveBalance && 
-                    parseInt(formData.number_of_days) > (selectedLeaveBalance.remaining_balance || 0)
-                      ? 'border-red-300 bg-red-50' 
-                      : 'border-gray-300'
-                  }`}
+                  readOnly
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed text-sm"
+                  title="Number of days is automatically calculated based on start and end dates"
                 />
-                {selectedLeaveBalance && parseInt(formData.number_of_days) > (selectedLeaveBalance.remaining_balance || 0) && (
-                  <p className="mt-1 text-xs text-red-600">
-                    You cannot request more than {selectedLeaveBalance.remaining_balance} day(s). Please reduce the number of days.
-                  </p>
-                )}
+                <p className="mt-1 text-xs text-gray-500">
+                  Automatically calculated from start and end dates
+                </p>
               </div>
             </div>
 
@@ -309,8 +418,14 @@ export default function ApplyLeavePage() {
                   value={formData.start_date}
                   onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
                   required
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                  min={new Date().toISOString().split('T')[0]}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
+                    overlapError ? 'border-red-300 bg-red-50' : 'border-gray-300'
+                  }`}
                 />
+                {overlapError && formData.start_date && (
+                  <p className="mt-1 text-xs text-red-600">{overlapError}</p>
+                )}
               </div>
 
               {/* End Date */}
@@ -324,9 +439,14 @@ export default function ApplyLeavePage() {
                   value={formData.end_date}
                   onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
                   required
-                  min={formData.start_date}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                  min={formData.start_date || new Date().toISOString().split('T')[0]}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
+                    overlapError ? 'border-red-300 bg-red-50' : 'border-gray-300'
+                  }`}
                 />
+                {overlapError && formData.end_date && (
+                  <p className="mt-1 text-xs text-red-600">{overlapError}</p>
+                )}
               </div>
             </div>
 
@@ -358,19 +478,32 @@ export default function ApplyLeavePage() {
               </div>
             )}
 
+            {/* Overlap Error Message */}
+            {overlapError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                <div className="flex items-start">
+                  <svg className="w-5 h-5 mr-2 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                  <p className="text-sm">{overlapError}</p>
+                </div>
+              </div>
+            )}
+
             {/* Submit Button */}
             <div className="mt-4">
               <button
                 type="submit"
-                disabled={loading || (!isUpdate && balanceError !== '')}
+                disabled={loading || (!isUpdate && balanceError !== '') || overlapError !== ''}
                 className="bg-green-600 text-white px-6 py-2.5 rounded-lg font-medium hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
               >
                 {loading ? 'Submitting...' : isUpdate ? 'Update Leave' : 'Apply for Leave'}
               </button>
-              {!isUpdate && balanceError && (
+              {!isUpdate && (balanceError || overlapError) && (
                 <p className="mt-2 text-xs text-gray-500">
-                  Please adjust your leave request or contact HR to increase your leave balance.
+                  {balanceError ? 'Please adjust your leave request or contact HR to increase your leave balance.' : ''}
+                  {overlapError ? 'Please select different dates that do not overlap with existing leaves.' : ''}
                 </p>
               )}
             </div>

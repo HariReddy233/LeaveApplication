@@ -70,7 +70,11 @@ export const GetAllEmployeesService = async (Request) => {
       // Skip for now
     }
 
-    query += ` ORDER BY u.email LIMIT 1000`;
+    query += ` ORDER BY COALESCE(
+      NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+      NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+      u.email
+    ) ASC LIMIT 1000`;
 
     console.log('GetAllEmployeesService query:', query);
     console.log('GetAllEmployeesService params:', params);
@@ -180,7 +184,11 @@ export const GetAllEmployeesService = async (Request) => {
          FROM users u
          LEFT JOIN employees e ON e.user_id = u.user_id
          WHERE u.role IS NOT NULL
-         ORDER BY u.email
+         ORDER BY COALESCE(
+           NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+           NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+           u.email
+         ) ASC
          LIMIT 1000`
       );
       console.log(`Fallback query returned ${result.rows.length} rows`);
@@ -223,6 +231,56 @@ export const GetUserProfileService = async (Request) => {
  * Get All HODs (for HOD assignment dropdown)
  * Returns list of users with HOD role
  */
+/**
+ * Get All Admins (for Admin assignment dropdown)
+ * Returns list of users with Admin role
+ */
+export const GetAdminsListService = async (Request) => {
+  try {
+    if (!database) {
+      throw CreateError("Database connection error", 500);
+    }
+
+    const result = await database.query(
+      `SELECT 
+        u.user_id,
+        u.user_id::text as id,
+        u.email,
+        COALESCE(
+          NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+          u.first_name,
+          u.last_name,
+          u.email
+        ) as full_name,
+        e.employee_id,
+        u.department,
+        e.location
+       FROM users u
+       LEFT JOIN employees e ON e.user_id = u.user_id
+       WHERE LOWER(TRIM(u.role)) = 'admin'
+       AND (u.status = 'Active' OR u.status IS NULL OR u.status = '')
+       ORDER BY COALESCE(
+         NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+         NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+         u.email
+       ) ASC`
+    );
+    
+    return {
+      Data: result.rows
+    };
+  } catch (error) {
+    console.error('GetAdminsListService error:', error.message);
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      throw CreateError("Database connection failed. Please check database configuration.", 500);
+    } else if (error.code && error.code.startsWith('42')) {
+      throw CreateError(`Database query error: ${error.message}`, 500);
+    } else {
+      throw CreateError(`Failed to fetch Admins: ${error.message || 'Unknown error'}`, 500);
+    }
+  }
+};
+
 export const GetHodsListService = async (Request) => {
   try {
     if (!database) {
@@ -247,7 +305,11 @@ export const GetHodsListService = async (Request) => {
        LEFT JOIN employees e ON e.user_id = u.user_id
        WHERE LOWER(TRIM(u.role)) = 'hod'
        AND (u.status = 'Active' OR u.status IS NULL OR u.status = '')
-       ORDER BY u.email`
+       ORDER BY COALESCE(
+         NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+         NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+         u.email
+       ) ASC`
     );
     
     // Ensure all HODs have employee records - create them if missing
@@ -417,7 +479,11 @@ export const GetUsersForAvailabilityService = async (Request) => {
                    u.designation
                  FROM users u
                  WHERE u.role IS NOT NULL
-                 ORDER BY u.email
+                 ORDER BY COALESCE(
+                   NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+                   NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+                   u.email
+                 ) ASC
                  LIMIT 1000`;
     
     const result = await database.query(query);
@@ -496,12 +562,13 @@ export const GetAllUsersService = async (Request) => {
         u.user_id::text as id,
         u.user_id::text as employee_id,
         u.email,
+        u.phone_number,
         COALESCE(
           NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
           NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
           u.email
         ) as full_name,
-        COALESCE(e.role, u.role, 'employee') as role,
+        u.role as role,
         u.status,
         e.employee_id,
         e.team,
@@ -526,11 +593,35 @@ export const GetAllUsersService = async (Request) => {
           WHERE hod_e.employee_id = e.manager_id
             AND LOWER(TRIM(COALESCE(hod_u.role, ''))) = 'hod'
           LIMIT 1
-        ) as hod_name
+        ) as hod_name,
+        e.admin_id,
+        (
+          SELECT admin_u.email 
+          FROM employees admin_e 
+          JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
+          WHERE admin_e.employee_id = e.admin_id
+            AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
+          LIMIT 1
+        ) as admin_email,
+        (
+          SELECT COALESCE(
+            NULLIF(TRIM(admin_u.first_name || ' ' || COALESCE(admin_u.last_name, '')), ''),
+            admin_u.email
+          )
+          FROM employees admin_e 
+          JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
+          WHERE admin_e.employee_id = e.admin_id
+            AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
+          LIMIT 1
+        ) as admin_name
        FROM users u
        LEFT JOIN employees e ON e.user_id = u.user_id
        WHERE u.role IS NOT NULL
-       ORDER BY u.email`
+       ORDER BY COALESCE(
+         NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+         NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+         u.email
+       ) ASC`
     );
 
     return {
@@ -552,7 +643,7 @@ export const GetAllUsersService = async (Request) => {
  */
 export const UpdateEmployeeService = async (Request) => {
   const { userId } = Request.params;
-  const { full_name, email, role, location, department, designation, hod_id } = Request.body;
+  const { full_name, email, role, location, department, designation, hod_id, admin_id, phone_number } = Request.body;
 
   if (!userId) {
     throw CreateError("User ID is required", 400);
@@ -621,6 +712,13 @@ export const UpdateEmployeeService = async (Request) => {
       paramCount++;
     }
 
+    // Update phone_number in users table
+    if (phone_number !== undefined) {
+      userUpdateQuery += `, phone_number = $${paramCount}`;
+      userParams.push(phone_number || null);
+      paramCount++;
+    }
+
     // Handle full_name - try first_name/last_name first, fallback to full_name
     if (full_name) {
       const nameParts = full_name.split(' ');
@@ -666,6 +764,12 @@ export const UpdateEmployeeService = async (Request) => {
           retryCount++;
         }
         
+        if (phone_number !== undefined) {
+          retryQuery += `, phone_number = $${retryCount}`;
+          retryParams.push(phone_number || null);
+          retryCount++;
+        }
+        
         if (full_name) {
           retryQuery += `, full_name = $${retryCount}`;
           retryParams.push(full_name);
@@ -694,19 +798,9 @@ export const UpdateEmployeeService = async (Request) => {
     // Track if we have any fields to update (besides manager_id)
     let hasOtherFields = false;
 
-    if (email) {
-      empUpdateQuery += `, email = $${paramCount}`;
-      empParams.push(email.toLowerCase());
-      paramCount++;
-      hasOtherFields = true;
-    }
-
-    if (full_name) {
-      empUpdateQuery += `, full_name = $${paramCount}`;
-      empParams.push(full_name);
-      paramCount++;
-      hasOtherFields = true;
-    }
+    // Note: email and full_name are in users table, not employees table
+    // They are already handled in the users table update above
+    // Do NOT update email or full_name in employees table
 
     if (normalizedRole) {
       empUpdateQuery += `, role = $${paramCount}`;
@@ -989,6 +1083,48 @@ export const UpdateEmployeeService = async (Request) => {
     } else {
       console.log('📝 hod_id is undefined, skipping manager_id update (keeping existing value)');
     }
+
+    // Handle admin_id assignment (for HODs)
+    let shouldUpdateAdminId = false;
+    let adminEmployeeId = null;
+    if (admin_id !== undefined) {
+      shouldUpdateAdminId = true;
+      if (admin_id && admin_id !== '') {
+        // Find Admin's employee_id
+        try {
+          const adminResult = await database.query(
+            `SELECT e.employee_id, e.user_id, u.email, u.role
+             FROM employees e
+             JOIN users u ON u.user_id = e.user_id
+             WHERE (e.employee_id = $1 OR e.employee_id::text = $1 OR e.user_id = $1 OR e.user_id::text = $1)
+               AND LOWER(TRIM(u.role)) = 'admin'
+             LIMIT 1`,
+            [admin_id]
+          );
+          
+          if (adminResult.rows.length > 0) {
+            adminEmployeeId = adminResult.rows[0].employee_id;
+            console.log(`✅ Found Admin employee_id: ${adminEmployeeId}`);
+          } else {
+            console.warn(`⚠️ Admin not found with admin_id: ${admin_id}`);
+          }
+        } catch (adminError) {
+          console.error('❌ Failed to find Admin employee_id:', adminError);
+          shouldUpdateAdminId = false;
+        }
+      } else {
+        // Empty string means clear the Admin assignment
+        console.log('📝 admin_id is empty, will set admin_id to NULL');
+        adminEmployeeId = null;
+      }
+      
+      if (shouldUpdateAdminId) {
+        empUpdateQuery += `, admin_id = $${paramCount}`;
+        empParams.push(adminEmployeeId);
+        paramCount++;
+        hasOtherFields = true;
+      }
+    }
     
     // If only manager_id is being updated (no other fields), make sure the query is valid
     if (!hasOtherFields && shouldUpdateManagerId) {
@@ -1051,10 +1187,10 @@ export const UpdateEmployeeService = async (Request) => {
               );
               if (userInfo.rows.length > 0) {
                 const createResult = await database.query(
-                  `INSERT INTO employees (user_id, email, full_name, role, manager_id)
-                   VALUES ($1, $2, $3, $4, $5)
+                  `INSERT INTO employees (user_id, role, manager_id)
+                   VALUES ($1, $2, $3)
                    RETURNING employee_id, manager_id`,
-                  [userId, userInfo.rows[0].email, userInfo.rows[0].name, normalizedRole || 'employee', hodEmployeeId]
+                  [userId, normalizedRole || 'employee', hodEmployeeId]
                 );
                 if (createResult.rows.length > 0) {
                   console.log(`✅ Created employee record with manager_id: ${createResult.rows[0].manager_id}`);
@@ -1148,12 +1284,10 @@ export const UpdateEmployeeService = async (Request) => {
               try {
                 // Try INSERT first
           await database.query(
-            `INSERT INTO employees (user_id, email, full_name, role, location, team, designation, manager_id)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
+                   VALUES ($1, $2, $3, $4, $5, $6)`,
             [
               userId,
-              email || '',
-              full_name || '',
               normalizedRole || 'employee',
               location || null,
               department || null,

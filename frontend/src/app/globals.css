@@ -156,6 +156,15 @@ aside nav.sidebar-scroll::-webkit-scrollbar-thumb:hover {
   animation: fade-in 0.5s ease-out;
 }
 
+/* Fix for Next.js portal elements with zero dimensions */
+/* Make portal container transparent and let children handle positioning */
+nextjs-portal {
+  display: contents !important;
+}
 
-
+/* Ensure fixed positioned modals inside portal work correctly */
+nextjs-portal > div[style*="position: fixed"],
+nextjs-portal > div[class*="fixed"] {
+  position: fixed !important;
+}
 

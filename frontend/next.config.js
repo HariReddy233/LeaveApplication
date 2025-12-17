@@ -18,9 +18,10 @@ const nextConfig = {
   // Enable compression
   compress: true,
   // Optimize bundle
-  experimental: {
-    optimizeCss: true,
-  },
+  // Note: optimizeCss can cause issues in some Next.js versions
+  // experimental: {
+  //   optimizeCss: true,
+  // },
 }
 
 module.exports = nextConfig

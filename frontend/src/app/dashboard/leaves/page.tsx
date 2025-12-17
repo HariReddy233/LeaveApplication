@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ReactPaginate from 'react-paginate';
-import { Edit, Trash2, Settings, FileText, FileSpreadsheet } from 'lucide-react';
+import { Edit, Trash2, FileText, FileSpreadsheet } from 'lucide-react';
 import api from '@/lib/api';
 import PageTitle from '@/components/Common/PageTitle';
 import DateFormatter from '@/utils/DateFormatter';
@@ -17,10 +17,10 @@ export default function MyLeavesPage() {
   const currentYear = new Date().getFullYear();
   const [pageNumber, setPageNumber] = useState(1);
   const [perPage, setPerPage] = useState(5);
-  const [searchKey, setSearchKey] = useState('0');
-  const [debouncedSearchKey, setDebouncedSearchKey] = useState('0');
   const [selectedYear, setSelectedYear] = useState(currentYear);
+  const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [leaves, setLeaves] = useState<any[]>([]);
+  const [allLeaves, setAllLeaves] = useState<any[]>([]);
   const [totalLeave, setTotalLeave] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -30,39 +30,67 @@ export default function MyLeavesPage() {
     yearOptions.push(i);
   }
 
-  // Debounce search input
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearchKey(searchKey);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchKey]);
-
   useEffect(() => {
     fetchLeaves();
-  }, [pageNumber, perPage, debouncedSearchKey, selectedYear]);
+  }, [pageNumber, perPage, selectedYear]);
+
+  // Filter leaves by status when status changes
+  useEffect(() => {
+    filterLeavesByStatus();
+  }, [selectedStatus, allLeaves]);
 
   const fetchLeaves = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/Leave/LeaveList/${pageNumber}/${perPage}/${debouncedSearchKey}`, {
+      // Fetch all leaves (no search, no pagination limit for filtering)
+      const response = await api.get(`/Leave/LeaveList/1/1000/0`, {
         params: { year: selectedYear }
       });
       
       if (response.data) {
         const data = Array.isArray(response.data.Data) ? response.data.Data : [];
-        const total = response.data.Total?.[0]?.count || 0;
-        setLeaves(data);
+        const total = response.data.Total?.[0]?.count || data.length;
+        setAllLeaves(data);
         setTotalLeave(total);
       } else {
-        setLeaves([]);
+        setAllLeaves([]);
         setTotalLeave(0);
       }
     } catch (err: any) {
-      setLeaves([]);
+      setAllLeaves([]);
       setTotalLeave(0);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const filterLeavesByStatus = () => {
+    if (selectedStatus === 'All') {
+      const paginatedLeaves = allLeaves.slice((pageNumber - 1) * perPage, pageNumber * perPage);
+      setLeaves(paginatedLeaves);
+      setTotalLeave(allLeaves.length);
+    } else {
+      let filtered = allLeaves.filter((record: any) => {
+        const hodStatus = (record.HodStatus || record.hod_status || 'Pending').toString().trim();
+        const adminStatus = (record.AdminStatus || record.admin_status || 'Pending').toString().trim();
+        const finalStatus = (record.status || record.Status || record.final_status || '').toString().trim().toLowerCase();
+
+        if (selectedStatus === 'Approved') {
+          if (finalStatus === 'approved') return true;
+          return hodStatus.toLowerCase() === 'approved' && adminStatus.toLowerCase() === 'approved';
+        } else if (selectedStatus === 'Rejected') {
+          if (finalStatus === 'rejected') return true;
+          return hodStatus.toLowerCase() === 'rejected' || adminStatus.toLowerCase() === 'rejected';
+        } else if (selectedStatus === 'Pending') {
+          if (finalStatus === 'pending') return true;
+          return hodStatus.toLowerCase() === 'pending' && adminStatus.toLowerCase() === 'pending';
+        }
+        return false;
+      });
+
+      const paginatedLeaves = filtered.slice((pageNumber - 1) * perPage, pageNumber * perPage);
+      setLeaves(paginatedLeaves);
+      setTotalLeave(filtered.length);
     }
   };
 
@@ -75,9 +103,8 @@ export default function MyLeavesPage() {
     setPageNumber(1);
   };
 
-  const SearchKeywordOnChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const key = e.target.value || '0';
-    setSearchKey(key);
+  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedStatus(e.target.value);
     setPageNumber(1);
   };
 
@@ -149,26 +176,23 @@ export default function MyLeavesPage() {
           {/* Action Buttons Row */}
           <div className="flex justify-end mb-3">
             <div className="flex gap-2">
-              <button className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm flex items-center gap-2">
-                <Settings className="w-4 h-4" />
-              </button>
               <button
                 onClick={() => ExportDataJSON(leaves, 'Leave', 'xls')}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm flex items-center gap-2"
+                className="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm flex items-center gap-2 transition-colors"
               >
                 <FileSpreadsheet className="w-4 h-4" /> Export
               </button>
               <button
                 onClick={() => ExportDataJSON(leaves, 'Leave', 'csv')}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm flex items-center gap-2"
+                className="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm flex items-center gap-2 transition-colors"
               >
                 <FileText className="w-4 h-4" /> Export CSV
               </button>
             </div>
           </div>
 
-          {/* Year and Search Row */}
-          <div className="mb-3 flex items-center gap-4">
+          {/* Year and Status Filter Row */}
+          <div className="mb-3 flex items-center gap-4 flex-wrap">
             <div className="flex items-center">
               <span className="text-sm text-gray-700 mr-2">Year :</span>
               <select
@@ -177,7 +201,7 @@ export default function MyLeavesPage() {
                   setSelectedYear(parseInt(e.target.value));
                   setPageNumber(1);
                 }}
-                className="border border-gray-300 rounded px-3 py-1.5 text-sm"
+                className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
               >
                 {yearOptions.map(year => (
                   <option key={year} value={year}>{year}</option>
@@ -185,14 +209,17 @@ export default function MyLeavesPage() {
               </select>
             </div>
             <div className="flex items-center">
-              <span className="text-sm text-gray-700 mr-2">Search :</span>
-              <input
-                type="text"
-                placeholder={`${totalLeave} records...`}
-                className="border border-gray-300 rounded px-3 py-1.5 text-sm w-auto"
-                defaultValue=""
-                onChange={SearchKeywordOnChange}
-              />
+              <span className="text-sm text-gray-700 mr-2">Status :</span>
+              <select
+                value={selectedStatus}
+                onChange={handleStatusChange}
+                className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors min-w-[140px]"
+              >
+                <option value="All">All</option>
+                <option value="Pending">Pending</option>
+                <option value="Approved">Approved</option>
+                <option value="Rejected">Rejected</option>
+              </select>
             </div>
           </div>
 

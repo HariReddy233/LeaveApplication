@@ -137,6 +137,7 @@ export default function EmployeesPage() {
                     <th className="pb-3">Department</th>
                     <th className="pb-3">Role</th>
                     <th className="pb-3">Assigned HOD</th>
+                    <th className="pb-3">Assigned Admin</th>
                     <th className="pb-3">Actions</th>
                   </tr>
                 </thead>
@@ -157,6 +158,16 @@ export default function EmployeesPage() {
                           <div>
                             <div className="font-medium">{employee.hod_name}</div>
                             <div className="text-xs text-gray-500">{employee.hod_email}</div>
+                          </div>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="py-3 text-gray-700">
+                        {employee.admin_name ? (
+                          <div>
+                            <div className="font-medium">{employee.admin_name}</div>
+                            <div className="text-xs text-gray-500">{employee.admin_email}</div>
                           </div>
                         ) : (
                           <span className="text-gray-400">-</span>

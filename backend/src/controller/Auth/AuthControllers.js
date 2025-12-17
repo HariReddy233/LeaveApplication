@@ -1,6 +1,7 @@
 //Internal Lib Import
 import RegistrationService from "../../services/Auth/RegistrationService.js";
 import LoginService from "../../services/Auth/LoginService.js";
+import { RequestPasswordResetService, ResetPasswordService } from "../../services/Auth/ForgotPasswordService.js";
 import database from "../../config/database.js";
 import DecodedToken from "../../utility/DecodedToken.js";
 
@@ -127,9 +128,41 @@ export const GetCurrentUser = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Request Password Reset - Send OTP
+ * @access public
+ * @route /api/v1/Auth/ForgotPassword
+ * @method POST
+ */
+export const ForgotPassword = async (req, res, next) => {
+  try {
+    const result = await RequestPasswordResetService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc Reset Password with OTP
+ * @access public
+ * @route /api/v1/Auth/ResetPassword
+ * @method POST
+ */
+export const ResetPassword = async (req, res, next) => {
+  try {
+    const result = await ResetPasswordService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   LoginUser,
   RegisterUser,
   GetCurrentUser,
+  ForgotPassword,
+  ResetPassword,
 };
 

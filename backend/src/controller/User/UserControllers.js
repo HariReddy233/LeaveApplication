@@ -7,6 +7,7 @@ import {
   UpdateEmployeeService,
   GetUsersForAvailabilityService,
   GetHodsListService,
+  GetAdminsListService,
 } from "../../services/User/UserService.js";
 
 /**
@@ -124,6 +125,21 @@ export const HodsList = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Get All Admins (for Admin assignment dropdown)
+ * @access private (Admin only)
+ * @route /api/v1/User/AdminsList
+ * @method GET
+ */
+export const AdminsList = async (req, res, next) => {
+  try {
+    const result = await GetAdminsListService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   EmployeeList,
   UserProfile,
@@ -132,5 +148,6 @@ export default {
   UpdateEmployee,
   UserListForAvailability,
   HodsList,
+  AdminsList,
 };
 

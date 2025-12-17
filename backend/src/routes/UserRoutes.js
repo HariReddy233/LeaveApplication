@@ -68,6 +68,14 @@ UserRoutes.get(
   UserControllers.HodsList,
 );
 
+//Get All Admins (for Admin assignment dropdown) - Admin only
+UserRoutes.get(
+  "/AdminsList",
+  CheckEmployeeAuth,
+  CheckAdminAuth,
+  UserControllers.AdminsList,
+);
+
 export default UserRoutes;
 
 

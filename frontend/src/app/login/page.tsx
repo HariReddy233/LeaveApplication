@@ -256,12 +256,9 @@ export default function LoginPage() {
                   {/* Forgot Password Link */}
                   <div className="flex items-center justify-end -mt-1">
                     <a
-                      href="#"
+                      href="/forgot-password"
                       className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
                       style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                      }}
                     >
                       Forgot password?
                     </a>

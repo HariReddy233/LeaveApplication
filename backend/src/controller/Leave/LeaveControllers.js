@@ -12,6 +12,9 @@ import {
   FilterLeaveByStatusAdminService,
   FilterLeaveByStatusHodService,
   GetLeaveBalanceService,
+  CheckOverlappingLeavesService,
+  BulkApproveLeaveHodService,
+  BulkApproveLeaveAdminService,
 } from "../../services/Leave/LeaveService.js";
 
 /**
@@ -195,6 +198,51 @@ export const LeaveBalance = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Check for Overlapping Leave Dates
+ * @access private
+ * @route /api/v1/Leave/CheckOverlappingLeaves
+ * @method POST
+ */
+export const CheckOverlappingLeaves = async (req, res, next) => {
+  try {
+    const result = await CheckOverlappingLeavesService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc Bulk Approve/Reject Leaves (HOD)
+ * @access private
+ * @route /api/v1/Leave/BulkApproveHod
+ * @method POST
+ */
+export const BulkApproveHod = async (req, res, next) => {
+  try {
+    const result = await BulkApproveLeaveHodService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc Bulk Approve/Reject Leaves (Admin)
+ * @access private
+ * @route /api/v1/Leave/BulkApprove
+ * @method POST
+ */
+export const BulkApprove = async (req, res, next) => {
+  try {
+    const result = await BulkApproveLeaveAdminService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   LeaveCreate,
   LeaveList,
@@ -208,5 +256,8 @@ export default {
   LeaveApprove,
   LeaveApproveHod,
   LeaveBalance,
+  CheckOverlappingLeaves,
+  BulkApproveHod,
+  BulkApprove,
 };
 

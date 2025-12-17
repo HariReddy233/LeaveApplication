@@ -3,15 +3,17 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
-import { Shield, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Shield, Clock, CheckCircle, XCircle, AlertCircle, CalendarDays } from 'lucide-react';
 
 export default function SettingsPage() {
   const router = useRouter();
   const currentYear = new Date().getFullYear();
   const [authStats, setAuthStats] = useState<any>(null);
   const [leaveBalance, setLeaveBalance] = useState<any[]>([]);
+  const [takenLeaves, setTakenLeaves] = useState<any[]>([]);
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string>('');
 
   // Generate year options (current year and previous 2 years, next year)
   const yearOptions = [];
@@ -20,9 +22,27 @@ export default function SettingsPage() {
   }
 
   useEffect(() => {
-    fetchAuthStats();
+    fetchCurrentUser();
+  }, []);
+
+  useEffect(() => {
+    if (userRole !== 'employee') {
+      fetchAuthStats();
+    }
     fetchLeaveBalance();
-  }, [selectedYear]);
+    fetchTakenLeaves();
+  }, [selectedYear, userRole]);
+
+  const fetchCurrentUser = async () => {
+    try {
+      const response = await api.get('/Auth/Me');
+      if (response.data?.user) {
+        setUserRole(response.data.user.role?.toLowerCase() || 'employee');
+      }
+    } catch (error) {
+      console.error('Failed to fetch current user:', error);
+    }
+  };
 
   const fetchAuthStats = async () => {
     try {
@@ -50,6 +70,36 @@ export default function SettingsPage() {
     }
   };
 
+  const fetchTakenLeaves = async () => {
+    try {
+      // Fetch approved leaves for the selected year
+      const startDate = `${selectedYear}-01-01`;
+      const endDate = `${selectedYear}-12-31`;
+      
+      const response = await api.get('/Leave/LeaveList/1/1000/0');
+      const allLeaves = response.data?.Data || response.data?.data || [];
+      
+      // Filter for approved leaves in the selected year
+      const approvedLeaves = allLeaves.filter((leave: any) => {
+        const leaveDate = new Date(leave.start_date);
+        const leaveYear = leaveDate.getFullYear();
+        const isApproved = (leave.status === 'Approved' || 
+                           (leave.hod_status === 'Approved' && leave.admin_status === 'Approved'));
+        return isApproved && leaveYear === selectedYear;
+      });
+      
+      // Sort by start date (most recent first)
+      approvedLeaves.sort((a: any, b: any) => {
+        return new Date(b.start_date).getTime() - new Date(a.start_date).getTime();
+      });
+      
+      setTakenLeaves(approvedLeaves);
+    } catch (error: any) {
+      console.error('Failed to fetch taken leaves:', error);
+      setTakenLeaves([]);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-white rounded-lg border border-gray-200 p-6">
@@ -61,8 +111,9 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {/* Authorization Management Section */}
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
+      {/* Authorization Management Section - Only for Admin and HOD */}
+      {(userRole === 'admin' || userRole === 'hod') && (
+        <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-center gap-2 mb-4">
           <Shield className="w-5 h-5 text-blue-600" />
           <h2 className="text-xl font-semibold text-gray-900">Authorization Management</h2>
@@ -123,11 +174,12 @@ export default function SettingsPage() {
             <p className="text-sm text-gray-600">No authorization data available</p>
           </div>
         )}
-      </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold text-gray-900">Leave Balance</h2>
+          <h2 className="text-xl font-semibold text-gray-900">Leave Balance & History</h2>
           <select
             value={selectedYear}
             onChange={(e) => setSelectedYear(parseInt(e.target.value))}
@@ -138,6 +190,10 @@ export default function SettingsPage() {
             ))}
           </select>
         </div>
+        
+        <p className="text-sm text-gray-600 mb-4">
+          Year-to-Date (YTD) leave balance and history for {selectedYear}
+        </p>
         
         {leaveBalance.length > 0 ? (
           <div className="overflow-x-auto">
@@ -175,23 +231,76 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* Already Taken Leaves */}
       <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Leave Management Settings</h2>
-        <div className="space-y-4">
-          <div className="p-4 bg-gray-50 rounded-lg">
-            <h3 className="font-semibold text-gray-900 mb-2">Calendar Creation</h3>
-            <p className="text-sm text-gray-600">
-              Create and manage calendar templates that can be assigned to employees
-            </p>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Already Taken Leaves ({selectedYear})</h2>
+        
+        {takenLeaves.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="text-left text-gray-600 text-sm font-medium border-b">
+                  <th className="pb-3">Leave Type</th>
+                  <th className="pb-3">Start Date</th>
+                  <th className="pb-3">End Date</th>
+                  <th className="pb-3">Duration</th>
+                  <th className="pb-3">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {takenLeaves.map((leave: any) => {
+                  const startDate = new Date(leave.start_date);
+                  const endDate = new Date(leave.end_date);
+                  const daysDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                  
+                  return (
+                    <tr key={leave.id || leave._id} className="border-b hover:bg-gray-50">
+                      <td className="py-3 text-gray-900 font-medium">{leave.leave_type || leave.LeaveType || 'N/A'}</td>
+                      <td className="py-3 text-gray-700">
+                        {startDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                      </td>
+                      <td className="py-3 text-gray-700">
+                        {endDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}
+                      </td>
+                      <td className="py-3 text-gray-700">{daysDiff} {daysDiff === 1 ? 'day' : 'days'}</td>
+                      <td className="py-3">
+                        <span className="px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
+                          Approved
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
+        ) : (
           <div className="p-4 bg-gray-50 rounded-lg">
-            <h3 className="font-semibold text-gray-900 mb-2">Email Notifications</h3>
-            <p className="text-sm text-gray-600">
-              Configure email notifications for leave applications and approvals
-            </p>
+            <p className="text-sm text-gray-600">No approved leaves found for {selectedYear}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Leave Management Settings - Only for Admin and HOD */}
+      {(userRole === 'admin' || userRole === 'hod') && (
+        <div className="bg-white rounded-lg border border-gray-200 p-6">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Leave Management Settings</h2>
+          <div className="space-y-4">
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <h3 className="font-semibold text-gray-900 mb-2">Calendar Creation</h3>
+              <p className="text-sm text-gray-600">
+                Create and manage calendar templates that can be assigned to employees
+              </p>
+            </div>
+            <div className="p-4 bg-gray-50 rounded-lg">
+              <h3 className="font-semibold text-gray-900 mb-2">Email Notifications</h3>
+              <p className="text-sm text-gray-600">
+                Configure email notifications for leave applications and approvals
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
         <h2 className="text-xl font-semibold text-gray-900 mb-4">Shift Management Settings</h2>

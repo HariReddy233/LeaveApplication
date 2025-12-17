@@ -14,4 +14,10 @@ AuthRoutes.post("/RegisterUser", AuthControllers.RegisterUser);
 //Get Current User
 AuthRoutes.get("/Me", AuthControllers.GetCurrentUser);
 
+//Forgot Password - Request OTP
+AuthRoutes.post("/ForgotPassword", AuthControllers.ForgotPassword);
+
+//Reset Password - Verify OTP and Set New Password
+AuthRoutes.post("/ResetPassword", AuthControllers.ResetPassword);
+
 export default AuthRoutes;

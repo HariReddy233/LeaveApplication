@@ -17,23 +17,54 @@ export default function EditEmployeePage() {
     location: '',
     department: '',
     designation: '',
-    hod_id: '', // HOD assignment (manager_id)
+    hod_id: '', // HOD assignment (manager_id) - for Employees
+    admin_id: '', // Admin assignment (admin_id) - for HODs
+    phone_number: '',
   });
   const [departments, setDepartments] = useState<any[]>([]);
   const [hods, setHods] = useState<any[]>([]);
+  const [admins, setAdmins] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [error, setError] = useState('');
   const [hodsError, setHodsError] = useState('');
   const [hodsLoading, setHodsLoading] = useState(true);
+  const [adminsLoading, setAdminsLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isAdminEditingSelf, setIsAdminEditingSelf] = useState(false);
+
+  useEffect(() => {
+    fetchCurrentUser();
+  }, []);
 
   useEffect(() => {
     if (employeeId) {
       fetchEmployee();
       fetchDepartments();
-      fetchHods();
+      // Only fetch HODs/Admins if not admin editing self
+      if (!isAdminEditingSelf) {
+        fetchHods();
+        fetchAdmins();
+      }
     }
-  }, [employeeId]);
+  }, [employeeId, isAdminEditingSelf]);
+
+  const fetchCurrentUser = async () => {
+    try {
+      const response = await api.get('/Auth/Me');
+      if (response.data && response.data.user) {
+        const user = response.data.user;
+        setCurrentUser(user);
+        // Check if current user is admin and editing their own profile
+        const isAdmin = (user.role || '').toLowerCase() === 'admin';
+        const userId = user.id || user.user_id;
+        const isEditingSelf = userId?.toString() === employeeId;
+        setIsAdminEditingSelf(isAdmin && isEditingSelf);
+      }
+    } catch (err: any) {
+      console.error('Failed to fetch current user:', err);
+    }
+  };
 
   // Refetch HODs if they failed to load initially
   useEffect(() => {
@@ -62,6 +93,36 @@ export default function EditEmployeePage() {
       }
     }
   }, [hods]);
+
+  // Update Admin selection when Admins are loaded and we have an admin_id
+  useEffect(() => {
+    if (admins.length > 0 && formData.admin_id) {
+      console.log('🔍 Matching admin_id:', formData.admin_id, 'with loaded admins');
+      // Try to match the current admin_id with the loaded Admins
+      // admin_id is the employee_id of the Admin, so we need to match it
+      const matchingAdmin = admins.find((admin) => 
+        admin.employee_id?.toString() === formData.admin_id ||
+        admin.id?.toString() === formData.admin_id ||
+        admin.user_id?.toString() === formData.admin_id
+      );
+      
+      if (matchingAdmin) {
+        // Update admin_id to match the dropdown value format
+        const correctAdminId = matchingAdmin.employee_id?.toString() || matchingAdmin.id?.toString() || matchingAdmin.user_id?.toString() || '';
+        console.log('✅ Found matching admin:', matchingAdmin.full_name || matchingAdmin.email, 'with employee_id:', correctAdminId);
+        if (correctAdminId && correctAdminId !== formData.admin_id) {
+          setFormData(prev => ({ ...prev, admin_id: correctAdminId }));
+        }
+      } else {
+        console.warn('⚠️ No matching admin found for admin_id:', formData.admin_id);
+        console.log('Available admins:', admins.map(a => ({ 
+          employee_id: a.employee_id, 
+          user_id: a.user_id, 
+          name: a.full_name || a.email 
+        })));
+      }
+    }
+  }, [admins]);
 
   // Refetch departments and HODs when page becomes visible
   useEffect(() => {
@@ -96,6 +157,8 @@ export default function EditEmployeePage() {
       );
       
       if (employee) {
+        console.log('📋 Full employee data from API:', employee);
+        
         // Get current HOD assignment (manager_id)
         // manager_id is the employee_id of the HOD
         // We need to match it with the HOD dropdown values (employee_id, id, or user_id)
@@ -104,17 +167,41 @@ export default function EditEmployeePage() {
           // manager_id is the employee_id of the HOD
           // Store it as-is, and we'll match it in the dropdown
           currentHodId = employee.manager_id.toString();
-          console.log('Current HOD manager_id:', currentHodId);
+          console.log('✅ Current HOD manager_id:', currentHodId);
+        } else {
+          console.log('ℹ️ No manager_id (HOD) assigned');
         }
+
+        // Get current Admin assignment (admin_id) - for HODs
+        let currentAdminId = '';
+        if (employee.admin_id) {
+          currentAdminId = employee.admin_id.toString();
+          console.log('✅ Current Admin admin_id:', currentAdminId, '(type:', typeof employee.admin_id, ')');
+        } else {
+          console.log('ℹ️ No admin_id (Admin) assigned');
+        }
+        
+        // Normalize role to lowercase for consistent comparison
+        const normalizedRole = (employee.role || 'employee').toLowerCase().trim();
+        console.log('📝 Employee role from DB:', employee.role, 'Normalized:', normalizedRole);
+        console.log('📱 Phone number from DB:', employee.phone_number, '(type:', typeof employee.phone_number, ')');
         
         setFormData({
           full_name: employee.full_name || '',
           email: employee.email || '',
-          role: employee.role || 'employee',
+          role: normalizedRole,
           location: employee.location || '',
           department: employee.team || employee.department || '',
           designation: employee.designation || '',
           hod_id: currentHodId,
+          admin_id: currentAdminId,
+          phone_number: employee.phone_number || '',
+        });
+        
+        console.log('✅ Form data set:', {
+          phone_number: employee.phone_number || '',
+          admin_id: currentAdminId,
+          hod_id: currentHodId
         });
       } else {
         setError('Employee not found');
@@ -202,6 +289,20 @@ export default function EditEmployeePage() {
     }
   };
 
+  const fetchAdmins = async () => {
+    try {
+      setAdminsLoading(true);
+      const response = await api.get('/User/AdminsList');
+      const adminsList = response.data?.Data || response.data?.data || response.data || [];
+      setAdmins(adminsList);
+    } catch (err: any) {
+      console.error('Failed to fetch Admins:', err);
+      setAdmins([]);
+    } finally {
+      setAdminsLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -224,7 +325,12 @@ export default function EditEmployeePage() {
         location: formData.location,
         department: formData.department,
         designation: formData.designation,
-        hod_id: formData.hod_id || '', // HOD assignment - send empty string if not selected
+        phone_number: formData.phone_number,
+        // Don't send hod_id/admin_id if admin is editing their own profile
+        ...(isAdminEditingSelf ? {} : { 
+          hod_id: formData.hod_id || '',
+          admin_id: formData.admin_id || ''
+        }),
       };
       
       console.log('📤 Sending update request with data:', updateData);
@@ -402,8 +508,25 @@ export default function EditEmployeePage() {
               </div>
             </div>
 
-            {/* HOD Assignment - Mandatory (only for employees, not for HODs) */}
-            {formData.role?.toLowerCase() !== 'hod' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Phone Number */}
+              <div>
+                <label htmlFor="phone_number" className="block text-sm font-medium text-gray-700 mb-2">
+                  Phone Number
+                </label>
+                <input
+                  id="phone_number"
+                  type="tel"
+                  value={formData.phone_number}
+                  onChange={(e) => setFormData({ ...formData, phone_number: e.target.value })}
+                  placeholder="+1234567890"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                />
+              </div>
+            </div>
+
+            {/* HOD Assignment - Mandatory (only for employees, not for HODs or Admin editing self) */}
+            {formData.role?.toLowerCase() === 'employee' && !isAdminEditingSelf && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label htmlFor="hod_id" className="block text-sm font-medium text-gray-700 mb-2">
@@ -442,6 +565,43 @@ export default function EditEmployeePage() {
                       Select the HOD who will approve this employee's leave applications
                     </p>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* Admin Assignment - Only for HODs (not for employees or admins) */}
+            {(formData.role?.toLowerCase() === 'hod' || formData.role?.toLowerCase() === 'HOD') && !isAdminEditingSelf && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label htmlFor="admin_id" className="block text-sm font-medium text-gray-700 mb-2">
+                    Assign Admin
+                  </label>
+                  <select
+                    id="admin_id"
+                    value={formData.admin_id}
+                    onChange={(e) => setFormData({ ...formData, admin_id: e.target.value })}
+                    disabled={adminsLoading}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
+                      adminsLoading ? 'bg-gray-100 cursor-not-allowed' : 'border-gray-300'
+                    }`}
+                  >
+                    <option value="">{adminsLoading ? 'Loading Admins...' : 'Select Admin (Optional)'}</option>
+                    {admins.length === 0 && !adminsLoading ? (
+                      <option value="" disabled>No Admins available</option>
+                    ) : (
+                      admins.map((admin) => {
+                        const adminValue = admin.employee_id?.toString() || admin.id?.toString() || admin.user_id?.toString() || '';
+                        return (
+                          <option key={admin.user_id || admin.id || admin.employee_id} value={adminValue}>
+                            {admin.full_name || admin.email} ({admin.email})
+                          </option>
+                        );
+                      })
+                    )}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Select the Admin who will receive notifications when this HOD approves leaves
+                  </p>
                 </div>
               </div>
             )}

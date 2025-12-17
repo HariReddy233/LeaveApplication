@@ -47,12 +47,13 @@ export default function LeaveListTable({
   const router = useRouter();
   const [pageNumber, setPageNumber] = useState(1);
   const [perPage, setPerPage] = useState(5);
-  const [searchKey, setSearchKey] = useState('0');
   const [selectedUserId, setSelectedUserId] = useState<string>('');
+  const [selectedStatus, setSelectedStatus] = useState<string>(status || 'All');
   const [users, setUsers] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [userRole, setUserRole] = useState<string>('');
   const [leaves, setLeaves] = useState<any[]>([]);
+  const [allLeaves, setAllLeaves] = useState<any[]>([]);
   const [totalLeave, setTotalLeave] = useState(0);
   const [loading, setLoading] = useState(true);
 
@@ -125,7 +126,12 @@ export default function LeaveListTable({
     if (currentUser && userRole) {
       fetchLeaves();
     }
-  }, [pageNumber, perPage, searchKey, selectedUserId, endpoint, currentUser, userRole]);
+  }, [pageNumber, perPage, selectedUserId, endpoint, currentUser, userRole]);
+
+  // Filter leaves by status when status changes
+  useEffect(() => {
+    filterLeavesByStatus();
+  }, [selectedStatus, allLeaves, pageNumber, perPage]);
 
   const fetchCurrentUser = async () => {
     try {
@@ -293,13 +299,13 @@ export default function LeaveListTable({
       let response;
       if (method === 'POST') {
         // POST request for status filtering
-        const url = `${actualEndpoint}/${pageNumber}/${perPage}/${searchKey}`;
+        const url = `${actualEndpoint}/${pageNumber}/${perPage}/0`;
         response = await api.post(url, { status });
       } else {
-        // GET request
+        // GET request - fetch all leaves (no search, no pagination limit for filtering)
         const url = actualEndpoint.includes('?') 
-          ? `${actualEndpoint}&pageNumber=${pageNumber}&perPage=${perPage}&searchKeyword=${searchKey}`
-          : `${actualEndpoint}/${pageNumber}/${perPage}/${searchKey}`;
+          ? `${actualEndpoint}&pageNumber=1&perPage=1000&searchKeyword=0`
+          : `${actualEndpoint}/1/1000/0`;
         response = await api.get(url);
       }
       
@@ -379,124 +385,11 @@ export default function LeaveListTable({
           }
         }
         
-        // Client-side filtering for employee pages if status is provided
-        // Apply status filter when status is provided and method is GET
-        // This ensures status filtering works for Leave List pages (Pending/Approved/Rejected)
-        if (status && method === 'GET') {
-          const originalLength = data.length;
-          console.log(`🔍 Applying status filter "${status}" to ${originalLength} records`);
-          
-          // Log sample records before filtering for debugging
-          if (originalLength > 0) {
-            console.log('📋 Sample records before status filter:', data.slice(0, Math.min(3, originalLength)).map((r: any) => {
-              // Get all status-related fields
-              const statusFields: any = {};
-              Object.keys(r).forEach(key => {
-                if (key.toLowerCase().includes('status')) {
-                  statusFields[key] = r[key];
-                }
-              });
-              
-              return {
-                id: r.id,
-                statusFields: statusFields,
-                hodStatus: r.HodStatus || r.hod_status || r.hodStatus,
-                adminStatus: r.AdminStatus || r.admin_status || r.adminStatus,
-                employee: r.Employee?.[0]?.Email || r.email,
-                fullRecord: r // Include full record for debugging
-              };
-            }));
-          }
-          
-          data = data.filter((record: any) => {
-            // Get all possible status field names (case-insensitive)
-            // Check multiple possible field name variations
-            const finalStatus = (record.status || record.Status || record.final_status || '').toString().toLowerCase().trim();
-            const adminStatusRaw = record.AdminStatus || record.admin_status || record.adminStatus || 'Pending';
-            const hodStatusRaw = record.HodStatus || record.hod_status || record.hodStatus || 'Pending';
-            
-            // Normalize status values (handle case variations)
-            const adminStatus = adminStatusRaw.toString().trim();
-            const hodStatus = hodStatusRaw.toString().trim();
-            
-            // Debug: Log the first record's actual values
-            if (data.indexOf(record) === 0) {
-              console.log('🔍 First record status values:', {
-                finalStatus,
-                adminStatus,
-                hodStatus,
-                adminStatusRaw,
-                hodStatusRaw,
-                recordKeys: Object.keys(record).filter(k => k.toLowerCase().includes('status')),
-                fullRecord: {
-                  id: record.id,
-                  status: record.status,
-                  Status: record.Status,
-                  AdminStatus: record.AdminStatus,
-                  admin_status: record.admin_status,
-                  HodStatus: record.HodStatus,
-                  hod_status: record.hod_status
-                }
-              });
-            }
-            
-            let matches = false;
-            
-            if (status === 'Approved') {
-              // Show leaves that are fully approved (both HOD and Admin approved)
-              // Check final status first, then fallback to checking both statuses
-              if (finalStatus === 'approved') {
-                matches = true;
-              } else {
-                // Both must be approved for final approval (case-insensitive check)
-                const hodApproved = hodStatus.toLowerCase() === 'approved';
-                const adminApproved = adminStatus.toLowerCase() === 'approved';
-                matches = hodApproved && adminApproved;
-              }
-            } else if (status === 'Rejected') {
-              // Show leaves that are rejected (either HOD or Admin rejected)
-              // Check final status first, then fallback to checking either status
-              if (finalStatus === 'rejected') {
-                matches = true;
-              } else {
-                const hodRejected = hodStatus.toLowerCase() === 'rejected';
-                const adminRejected = adminStatus.toLowerCase() === 'rejected';
-                matches = hodRejected || adminRejected;
-              }
-            } else if (status === 'Pending') {
-              // Show leaves that are still pending (both are pending)
-              // Check final status first, then fallback to checking both statuses
-              if (finalStatus === 'pending') {
-                matches = true;
-              } else {
-                // Both must be pending (case-insensitive check)
-                const hodPending = hodStatus.toLowerCase() === 'pending';
-                const adminPending = adminStatus.toLowerCase() === 'pending';
-                matches = hodPending && adminPending;
-              }
-            }
-            
-            return matches;
-          });
-          
-          console.log(`✅ Status filter "${status}": ${originalLength} → ${data.length} records`);
-          
-          // Log sample records after filtering for debugging
-          if (data.length > 0) {
-            console.log('📋 Sample records after status filter:', data.slice(0, 3).map((r: any) => ({
-              id: r.id,
-              status: r.status || r.Status,
-              hodStatus: r.HodStatus || r.hod_status,
-              adminStatus: r.AdminStatus || r.admin_status,
-              employee: r.Employee?.[0]?.Email || r.email
-            })));
-          } else if (originalLength > 0) {
-            console.warn(`⚠️ Status filter "${status}" filtered out all ${originalLength} records. Check status field values.`);
-          }
-        }
+        // Store all leaves for client-side filtering
+        setAllLeaves(data);
         
-        setLeaves(data);
-        setTotalLeave(status && method === 'GET' ? data.length : total);
+        // Apply initial filtering
+        filterLeavesByStatus();
       }
     } catch (err: any) {
       console.error('Failed to fetch leaves:', err);
@@ -532,6 +425,41 @@ export default function LeaveListTable({
     }
   };
 
+  const filterLeavesByStatus = () => {
+    if (allLeaves.length === 0) {
+      setLeaves([]);
+      setTotalLeave(0);
+      return;
+    }
+
+    let filtered = allLeaves;
+    
+    if (selectedStatus !== 'All') {
+      filtered = allLeaves.filter((record: any) => {
+        const hodStatus = (record.HodStatus || record.hod_status || 'Pending').toString().trim();
+        const adminStatus = (record.AdminStatus || record.admin_status || 'Pending').toString().trim();
+        const finalStatus = (record.status || record.Status || record.final_status || '').toString().trim().toLowerCase();
+
+        if (selectedStatus === 'Approved') {
+          if (finalStatus === 'approved') return true;
+          return hodStatus.toLowerCase() === 'approved' && adminStatus.toLowerCase() === 'approved';
+        } else if (selectedStatus === 'Rejected') {
+          if (finalStatus === 'rejected') return true;
+          return hodStatus.toLowerCase() === 'rejected' || adminStatus.toLowerCase() === 'rejected';
+        } else if (selectedStatus === 'Pending') {
+          if (finalStatus === 'pending') return true;
+          return hodStatus.toLowerCase() === 'pending' && adminStatus.toLowerCase() === 'pending';
+        }
+        return false;
+      });
+    }
+
+    // Apply pagination
+    const paginatedLeaves = filtered.slice((pageNumber - 1) * perPage, pageNumber * perPage);
+    setLeaves(paginatedLeaves);
+    setTotalLeave(filtered.length);
+  };
+
   const PerPageOnChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     if (e.target.value === 'All') {
       setPerPage(totalLeave);
@@ -541,9 +469,8 @@ export default function LeaveListTable({
     setPageNumber(1);
   };
 
-  const SearchKeywordOnChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const key = e.target.value || '0';
-    setSearchKey(key);
+  const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedStatus(e.target.value);
     setPageNumber(1);
   };
 
@@ -625,53 +552,56 @@ export default function LeaveListTable({
             </div>
           </div>
 
-          {/* Search and User Filter */}
+          {/* User Filter and Status Filter */}
           <div className="mb-3 flex items-center gap-4 flex-wrap">
-            <div className="flex items-center">
-              <label htmlFor="user-select" className="text-sm text-gray-700 mr-2">User :</label>
-              <select
-                id="user-select"
-                value={selectedUserId}
-                onChange={(e) => {
-                  console.log('🔄 User selected:', e.target.value);
-                  setSelectedUserId(e.target.value);
-                  setPageNumber(1);
-                }}
-                className="border border-gray-300 rounded px-3 py-1.5 text-sm min-w-[200px]"
-                aria-label="Select user to filter leave applications"
-              >
-                {(userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'hod') && (
+            {(userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'hod') && (
+              <div className="flex items-center">
+                <label htmlFor="user-select" className="text-sm text-gray-700 mr-2">User :</label>
+                <select
+                  id="user-select"
+                  value={selectedUserId}
+                  onChange={(e) => {
+                    console.log('🔄 User selected:', e.target.value);
+                    setSelectedUserId(e.target.value);
+                    setPageNumber(1);
+                  }}
+                  className="border border-gray-300 rounded px-3 py-1.5 text-sm min-w-[200px] focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
+                  aria-label="Select user to filter leave applications"
+                >
                   <option value="">All Users</option>
+                  {users.length > 0 ? (
+                    users.map((user) => {
+                      const userId = user.user_id || user.id;
+                      const userName = user.full_name || user.email || 'Unknown User';
+                      return (
+                        <option key={userId} value={userId}>
+                          {userName}
+                        </option>
+                      );
+                    })
+                  ) : (
+                    <option value="">Loading users...</option>
+                  )}
+                </select>
+                {users.length > 0 && (
+                  <span className="ml-2 text-xs text-gray-500">({users.length} users)</span>
                 )}
-                {users.length > 0 ? (
-                  users.map((user) => {
-                    const userId = user.user_id || user.id;
-                    const userName = user.full_name || user.email || 'Unknown User';
-                    return (
-                      <option key={userId} value={userId}>
-                        {userName}
-                      </option>
-                    );
-                  })
-                ) : (
-                  <option value="">Loading users...</option>
-                )}
-              </select>
-              {users.length > 0 && (
-                <span className="ml-2 text-xs text-gray-500">({users.length} users)</span>
-              )}
-            </div>
+              </div>
+            )}
             <div className="flex items-center">
-              <label htmlFor="search-input" className="text-sm text-gray-700 mr-2">Search :</label>
-              <input
-                id="search-input"
-                type="text"
-                placeholder={`${totalLeave} records...`}
-                className="border border-gray-300 rounded px-3 py-1.5 text-sm w-auto"
-                defaultValue=""
-                onChange={SearchKeywordOnChange}
-                aria-label="Search leave applications"
-              />
+              <label htmlFor="status-select" className="text-sm text-gray-700 mr-2">Status :</label>
+              <select
+                id="status-select"
+                value={selectedStatus}
+                onChange={handleStatusChange}
+                className="border border-gray-300 rounded px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors min-w-[140px]"
+                aria-label="Filter by status"
+              >
+                <option value="All">All</option>
+                <option value="Pending">Pending</option>
+                <option value="Approved">Approved</option>
+                <option value="Rejected">Rejected</option>
+              </select>
             </div>
           </div>
 

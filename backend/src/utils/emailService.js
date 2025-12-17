@@ -599,7 +599,168 @@ This is an automated email. Please do not reply.
   }
 };
 
+/**
+ * Send Password Reset OTP Email
+ */
+export const sendPasswordResetOTPEmail = async ({
+  to,
+  user_name,
+  otp
+}) => {
+  try {
+    // Check if email is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('⚠️ Email not configured. SMTP_USER or SMTP_PASS missing in .env file');
+      return;
+    }
+
+    if (!to) {
+      console.warn('⚠️ Cannot send email: recipient email is missing');
+      return;
+    }
+
+    const mailTransporter = getTransporter();
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME || 'Consultare Leave Management'}" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
+      to: to,
+      subject: `Password Reset OTP - Consultare Leave Management`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+              line-height: 1.6; 
+              color: #1f2937; 
+              background-color: #f3f4f6; 
+              padding: 20px;
+            }
+            .email-wrapper { 
+              max-width: 600px; 
+              margin: 0 auto; 
+              background: #ffffff;
+              border-radius: 12px;
+              overflow: hidden;
+              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            .content { 
+              padding: 20px 24px; 
+              background: #ffffff;
+            }
+            .greeting {
+              font-size: 14px;
+              color: #374151;
+              margin-bottom: 12px;
+            }
+            .otp-box {
+              background: #eff6ff;
+              border: 2px solid #3b82f6;
+              border-radius: 8px;
+              padding: 20px;
+              margin: 20px 0;
+              text-align: center;
+            }
+            .otp-code {
+              font-size: 32px;
+              font-weight: 700;
+              color: #1e40af;
+              letter-spacing: 8px;
+              font-family: 'Courier New', monospace;
+            }
+            .warning {
+              background: #fef3c7;
+              border-left: 3px solid #f59e0b;
+              padding: 12px;
+              border-radius: 6px;
+              margin: 16px 0;
+            }
+            .warning-text {
+              color: #92400e;
+              font-size: 12px;
+              font-weight: 500;
+            }
+            .footer { 
+              text-align: center; 
+              padding: 24px; 
+              background: #f9fafb;
+              border-top: 1px solid #e5e7eb;
+            }
+            .footer-text {
+              color: #9ca3af; 
+              font-size: 12px; 
+              line-height: 1.6;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="email-wrapper">
+            <div class="content">
+              <div class="greeting">Dear ${user_name || 'User'},</div>
+              
+              <p style="color: #374151; font-size: 14px; margin-bottom: 16px;">
+                You have requested to reset your password. Please use the OTP below to complete the password reset process.
+              </p>
+              
+              <div class="otp-box">
+                <p style="color: #6b7280; font-size: 12px; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px;">Your OTP Code</p>
+                <div class="otp-code">${otp}</div>
+                <p style="color: #6b7280; font-size: 11px; margin-top: 8px;">Valid for 2 minutes only</p>
+              </div>
+              
+              <div class="warning">
+                <p class="warning-text">
+                  ⚠️ For security reasons, this OTP will expire in 2 minutes. Do not share this code with anyone.
+                </p>
+              </div>
+              
+              <p style="color: #6b7280; font-size: 13px; margin-top: 20px;">
+                If you did not request this password reset, please ignore this email or contact support if you have concerns.
+              </p>
+            </div>
+            <div class="footer">
+              <p class="footer-text">
+                This is an automated notification from the Consultare Leave Management System.<br>
+                Please do not reply to this email.
+              </p>
+              <p class="footer-text" style="margin-top: 12px; color: #d1d5db;">
+                &copy; ${new Date().getFullYear()} Consultare. All rights reserved.
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `Password Reset OTP
+
+Dear ${user_name || 'User'},
+
+You have requested to reset your password. Please use the OTP below:
+
+${otp}
+
+This OTP is valid for 2 minutes only.
+
+If you did not request this password reset, please ignore this email.
+
+© ${new Date().getFullYear()} Consultare Leave Management System`
+    };
+
+    const info = await mailTransporter.sendMail(mailOptions);
+    console.log(`✅ Password reset OTP email sent to ${to} - Message ID: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`❌ Failed to send password reset OTP email:`, error.message);
+    throw error;
+  }
+};
+
 export default {
   sendLeaveApplicationEmail,
-  sendLeaveApprovalEmail
+  sendLeaveApprovalEmail,
+  sendPasswordResetOTPEmail
 };

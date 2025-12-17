@@ -15,18 +15,23 @@ export default function CreateEmployeePage() {
     location: '',
     department: '',
     designation: '',
-    hod_id: '', // HOD assignment (manager_id)
+    hod_id: '', // HOD assignment (manager_id) - for Employees
+    admin_id: '', // Admin assignment (admin_id) - for HODs
+    phone_number: '',
   });
   const [departments, setDepartments] = useState<any[]>([]);
   const [hods, setHods] = useState<any[]>([]);
+  const [admins, setAdmins] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [hodsError, setHodsError] = useState('');
   const [hodsLoading, setHodsLoading] = useState(true);
+  const [adminsLoading, setAdminsLoading] = useState(true);
 
   useEffect(() => {
     fetchDepartments();
     fetchHods();
+    fetchAdmins();
   }, []);
 
   // Refetch departments and HODs when page becomes visible (user navigates back from creating department)
@@ -35,12 +40,14 @@ export default function CreateEmployeePage() {
       if (document.visibilityState === 'visible') {
         fetchDepartments();
         fetchHods();
+        fetchAdmins();
       }
     };
 
     const handleFocus = () => {
       fetchDepartments();
       fetchHods();
+      fetchAdmins();
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -125,6 +132,20 @@ export default function CreateEmployeePage() {
       setHodsError(`Error loading HODs: ${errorMessage}`);
     } finally {
       setHodsLoading(false);
+    }
+  };
+
+  const fetchAdmins = async () => {
+    try {
+      setAdminsLoading(true);
+      const response = await api.get('/User/AdminsList');
+      const adminsList = response.data?.Data || response.data?.data || response.data || [];
+      setAdmins(adminsList);
+    } catch (err: any) {
+      console.error('Failed to fetch Admins:', err);
+      setAdmins([]);
+    } finally {
+      setAdminsLoading(false);
     }
   };
 
@@ -231,11 +252,13 @@ export default function CreateEmployeePage() {
                   value={formData.role}
                   onChange={(e) => {
                     const newRole = e.target.value;
-                    // Clear HOD assignment if role is changed to HOD
+                    // Clear HOD assignment if role is changed to HOD or Admin
+                    // Clear Admin assignment if role is changed to Employee or Admin
                     setFormData({ 
                       ...formData, 
                       role: newRole,
-                      hod_id: newRole.toLowerCase() === 'hod' ? '' : formData.hod_id
+                      hod_id: (newRole.toLowerCase() === 'hod' || newRole.toLowerCase() === 'admin') ? '' : formData.hod_id,
+                      admin_id: (newRole.toLowerCase() === 'employee' || newRole.toLowerCase() === 'admin') ? '' : formData.admin_id
                     });
                   }}
                   required
@@ -300,8 +323,25 @@ export default function CreateEmployeePage() {
                 />
               </div>
 
-              {/* HOD Assignment - Only for employees, not for HODs */}
-              {formData.role?.toLowerCase() !== 'hod' && (
+              {/* Phone Number */}
+              <div>
+                <label htmlFor="phone_number" className="block text-sm font-medium text-gray-700 mb-2">
+                  Phone Number
+                </label>
+                <input
+                  id="phone_number"
+                  type="tel"
+                  value={formData.phone_number}
+                  onChange={(e) => setFormData({ ...formData, phone_number: e.target.value })}
+                  placeholder="+1234567890"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* HOD Assignment - Only for employees */}
+              {formData.role?.toLowerCase() === 'employee' && (
                 <div>
                   <label htmlFor="hod_id" className="block text-sm font-medium text-gray-700 mb-2">
                     Assign HOD <span className="text-red-500">*</span>
@@ -339,6 +379,41 @@ export default function CreateEmployeePage() {
                       Select the HOD who will approve this employee's leave applications
                     </p>
                   )}
+                </div>
+              )}
+
+              {/* Admin Assignment - Only for HODs */}
+              {formData.role?.toLowerCase() === 'hod' && (
+                <div>
+                  <label htmlFor="admin_id" className="block text-sm font-medium text-gray-700 mb-2">
+                    Assign Admin
+                  </label>
+                  <select
+                    id="admin_id"
+                    value={formData.admin_id}
+                    onChange={(e) => setFormData({ ...formData, admin_id: e.target.value })}
+                    disabled={adminsLoading}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
+                      adminsLoading ? 'bg-gray-100 cursor-not-allowed' : 'border-gray-300'
+                    }`}
+                  >
+                    <option value="">{adminsLoading ? 'Loading Admins...' : 'Select Admin (Optional)'}</option>
+                    {admins.length === 0 && !adminsLoading ? (
+                      <option value="" disabled>No Admins available</option>
+                    ) : (
+                      admins.map((admin) => {
+                        const adminValue = admin.employee_id?.toString() || admin.id?.toString() || admin.user_id?.toString() || '';
+                        return (
+                          <option key={admin.user_id || admin.id || admin.employee_id} value={adminValue}>
+                            {admin.full_name || admin.email} ({admin.email})
+                          </option>
+                        );
+                      })
+                    )}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Select the Admin who will receive notifications when this HOD approves leaves
+                  </p>
                 </div>
               )}
             </div>

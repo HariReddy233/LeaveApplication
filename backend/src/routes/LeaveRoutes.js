@@ -96,6 +96,29 @@ LeaveRoutes.get(
   LeaveControllers.LeaveBalance,
 );
 
+//Check Overlapping Leaves
+LeaveRoutes.post(
+  "/CheckOverlappingLeaves",
+  CheckEmployeeAuth,
+  LeaveControllers.CheckOverlappingLeaves,
+);
+
+//Bulk Approve/Reject (Admin)
+LeaveRoutes.post(
+  "/BulkApprove",
+  CheckEmployeeAuth,
+  CheckAdminAuth,
+  LeaveControllers.BulkApprove,
+);
+
+//Bulk Approve/Reject (HOD)
+LeaveRoutes.post(
+  "/BulkApproveHod",
+  CheckEmployeeAuth,
+  CheckHodAuth,
+  LeaveControllers.BulkApproveHod,
+);
+
 export default LeaveRoutes;
 
 

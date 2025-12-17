@@ -5,7 +5,7 @@ import CreateToken from "../../utility/CreateToken.js";
 import database from "../../config/database.js";
 
 const RegistrationService = async (Request) => {
-  const { email, password, fullName, role, location, department, designation, hod_id } = Request.body;
+  const { email, password, fullName, role, location, department, designation, hod_id, admin_id, phone_number } = Request.body;
 
   if (!email || !password) {
     throw CreateError("Email and password are required", 400);
@@ -16,8 +16,11 @@ const RegistrationService = async (Request) => {
   }
 
   // HOD assignment is mandatory for employees (not for HODs or admins)
+  // EXCEPTION: Public signup (no hod_id provided) creates Employee without HOD assignment
+  // Admin can later assign HOD when editing the user
   const normalizedRole = (role || 'employee').toLowerCase().trim();
-  if (normalizedRole === 'employee' && !hod_id) {
+  const isPublicSignup = !hod_id && !Request.body.admin_id; // Public signup has no hod_id or admin_id
+  if (normalizedRole === 'employee' && !hod_id && !isPublicSignup) {
     throw CreateError("HOD assignment is required for employees", 400);
   }
 
@@ -61,10 +64,10 @@ const RegistrationService = async (Request) => {
     const lastName = nameParts.slice(1).join(' ') || '';
 
     userResult = await database.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, role, status, department)
-       VALUES ($1, $2, $3, $4, $5, 'Active', $6)
-       RETURNING user_id as id, email, first_name, last_name, role, status, department`,
-      [email.toLowerCase(), passwordHash, firstName, lastName, role || 'employee', department || null]
+      `INSERT INTO users (email, password_hash, first_name, last_name, role, status, department, phone_number)
+       VALUES ($1, $2, $3, $4, $5, 'Active', $6, $7)
+       RETURNING user_id as id, email, first_name, last_name, role, status, department, phone_number`,
+      [email.toLowerCase(), passwordHash, firstName, lastName, role || 'employee', department || null, phone_number || null]
     );
   } catch (dbError) {
     // If new schema fails, try old schema
@@ -72,18 +75,18 @@ const RegistrationService = async (Request) => {
       // Try with department if column exists
       try {
         userResult = await database.query(
-          `INSERT INTO users (email, password_hash, full_name, role, department)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING id, email, full_name, role, created_at, department`,
-          [email.toLowerCase(), passwordHash, fullName || email, role || 'employee', department || null]
+          `INSERT INTO users (email, password_hash, full_name, role, department, phone_number)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           RETURNING id, email, full_name, role, created_at, department, phone_number`,
+          [email.toLowerCase(), passwordHash, fullName || email, role || 'employee', department || null, phone_number || null]
         );
       } catch (deptError) {
         // If department column doesn't exist, insert without it
         userResult = await database.query(
-          `INSERT INTO users (email, password_hash, full_name, role)
-           VALUES ($1, $2, $3, $4)
-           RETURNING id, email, full_name, role, created_at`,
-          [email.toLowerCase(), passwordHash, fullName || email, role || 'employee']
+          `INSERT INTO users (email, password_hash, full_name, role, phone_number)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id, email, full_name, role, created_at, phone_number`,
+          [email.toLowerCase(), passwordHash, fullName || email, role || 'employee', phone_number || null]
         );
       }
     } else {
@@ -203,6 +206,44 @@ const RegistrationService = async (Request) => {
     }
   }
 
+  // Get admin_id for HOD assignment (if HOD role and admin_id provided)
+  let adminEmployeeId = null;
+  if ((normalizedRole === 'hod' || normalizedRole === 'HOD') && admin_id) {
+    try {
+      // Similar logic to HOD lookup - find Admin's employee_id
+      let adminResult;
+      try {
+        adminResult = await database.query(
+          `SELECT employee_id, id FROM employees 
+           WHERE employee_id = $1 OR user_id = $1 OR id = $1 
+           LIMIT 1`,
+          [admin_id]
+        );
+      } catch (e1) {
+        try {
+          adminResult = await database.query(
+            `SELECT employee_id, id FROM employees 
+             WHERE employee_id::text = $1 OR user_id::text = $1 OR id::text = $1 
+             LIMIT 1`,
+            [admin_id.toString()]
+          );
+        } catch (e2) {
+          adminResult = await database.query(
+            `SELECT employee_id, id FROM employees WHERE user_id = $1 LIMIT 1`,
+            [admin_id]
+          );
+        }
+      }
+      
+      if (adminResult && adminResult.rows.length > 0) {
+        adminEmployeeId = adminResult.rows[0].employee_id || adminResult.rows[0].id;
+        console.log('✅ Found Admin employee_id:', adminEmployeeId);
+      }
+    } catch (adminError) {
+      console.warn('⚠️ Failed to find Admin employee_id:', adminError.message);
+    }
+  }
+
   // Create corresponding employee record
   // Use a simple approach: Try INSERT, if duplicate then UPDATE
   try {
@@ -212,8 +253,8 @@ const RegistrationService = async (Request) => {
     // Try with designation and manager_id
     try {
       await database.query(
-        `INSERT INTO employees (user_id, email, full_name, role, location, team, designation, manager_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        `INSERT INTO employees (user_id, email, full_name, role, location, team, designation, manager_id, admin_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           userId, 
           user.email, 
@@ -222,7 +263,8 @@ const RegistrationService = async (Request) => {
           location || null,
           department || null,
           designation || null,
-          hodEmployeeId || null
+          hodEmployeeId || null,
+          adminEmployeeId || null
         ]
       );
       insertSuccess = true;
@@ -241,8 +283,9 @@ const RegistrationService = async (Request) => {
              team = $5,
              designation = $6,
              manager_id = $7,
+             admin_id = $8,
              updated_at = NOW()
-             WHERE user_id = $8`,
+             WHERE user_id = $9`,
             [
               user.email, 
               fullName || email, 
@@ -251,6 +294,7 @@ const RegistrationService = async (Request) => {
               department || null,
               designation || null,
               hodEmployeeId || null,
+              adminEmployeeId || null,
               userId
             ]
           );
@@ -267,8 +311,9 @@ const RegistrationService = async (Request) => {
                location = $4,
                team = $5,
                manager_id = $6,
+               admin_id = $7,
                updated_at = NOW()
-               WHERE user_id = $7`,
+               WHERE user_id = $8`,
               [
                 user.email, 
                 fullName || email, 
@@ -276,6 +321,7 @@ const RegistrationService = async (Request) => {
                 location || null,
                 department || null,
                 hodEmployeeId || null,
+                adminEmployeeId || null,
                 userId
               ]
             );
@@ -289,8 +335,8 @@ const RegistrationService = async (Request) => {
         // Missing column - try without designation
         try {
           await database.query(
-            `INSERT INTO employees (user_id, email, full_name, role, location, team, manager_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            `INSERT INTO employees (user_id, email, full_name, role, location, team, manager_id, admin_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
             [
               userId, 
               user.email, 
@@ -298,7 +344,8 @@ const RegistrationService = async (Request) => {
               user.role,
               location || null,
               department || null,
-              hodEmployeeId || null
+              hodEmployeeId || null,
+              adminEmployeeId || null
             ]
           );
           insertSuccess = true;

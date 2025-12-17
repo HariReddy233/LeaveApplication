@@ -15,39 +15,8 @@ export default function ApprovalsPage() {
   const [error, setError] = useState('');
   const [filter, setFilter] = useState('pending');
   const [userRole, setUserRole] = useState<string>('');
-
-  // Real-time updates via SSE
-  useSSE({
-    onNewLeave: (event) => {
-      // Refresh leaves list when new leave is created
-      if (userRole) {
-        fetchLeaves();
-      }
-    },
-    onLeaveStatusUpdate: (event) => {
-      // Refresh leaves list when leave status is updated (immediately, no delay)
-      if (userRole) {
-        fetchLeaves();
-      }
-    },
-    onLeaveDeleted: (event) => {
-      // Refresh leaves list when leave is deleted
-      if (userRole) {
-        fetchLeaves();
-      }
-    },
-    enabled: true
-  });
-
-  useEffect(() => {
-    fetchUserRole();
-  }, []);
-
-  useEffect(() => {
-    if (userRole) {
-      fetchLeaves();
-    }
-  }, [filter, userRole]);
+  const [selectedLeaves, setSelectedLeaves] = useState<Set<number>>(new Set());
+  const [bulkLoading, setBulkLoading] = useState(false);
 
   const fetchUserRole = async () => {
     try {
@@ -132,6 +101,41 @@ export default function ApprovalsPage() {
     }
   };
 
+  // Real-time updates via SSE
+  useSSE({
+    onNewLeave: (event) => {
+      // Refresh leaves list when new leave is created
+      if (userRole) {
+        fetchLeaves();
+      }
+    },
+    onLeaveStatusUpdate: (event) => {
+      // Refresh leaves list when leave status is updated (immediately, no delay)
+      if (userRole) {
+        fetchLeaves();
+      }
+    },
+    onLeaveDeleted: (event) => {
+      // Refresh leaves list when leave is deleted
+      if (userRole) {
+        fetchLeaves();
+      }
+    },
+    enabled: true
+  });
+
+  useEffect(() => {
+    fetchUserRole();
+  }, []);
+
+  useEffect(() => {
+    if (userRole) {
+      fetchLeaves();
+    }
+    // Clear selections when filter changes
+    setSelectedLeaves(new Set());
+  }, [filter, userRole]);
+
   const handleApproval = async (id: number, status: 'approved' | 'rejected', comment: string = '') => {
     try {
       // Use the correct approval endpoint based on user role
@@ -176,6 +180,69 @@ export default function ApprovalsPage() {
     }
   };
 
+  const handleSelectLeave = (id: number) => {
+    const newSelected = new Set(selectedLeaves);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedLeaves(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    if (selectedLeaves.size === leaves.length) {
+      setSelectedLeaves(new Set());
+    } else {
+      setSelectedLeaves(new Set(leaves.map(l => l.id || l._id)));
+    }
+  };
+
+  const handleBulkApproval = async (status: 'approved' | 'rejected') => {
+    if (selectedLeaves.size === 0) {
+      alert('Please select at least one leave application');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to ${status} ${selectedLeaves.size} leave application(s)?`)) {
+      return;
+    }
+
+    try {
+      setBulkLoading(true);
+      const leaveIds = Array.from(selectedLeaves);
+      
+      // Use the correct bulk approval endpoint based on user role
+      if (userRole === 'hod') {
+        await api.post('/Leave/BulkApproveHod', {
+          leave_ids: leaveIds,
+          status: status === 'approved' ? 'Approved' : 'Rejected',
+          comment: ''
+        });
+      } else if (userRole === 'admin') {
+        await api.post('/Leave/BulkApprove', {
+          leave_ids: leaveIds,
+          status: status === 'approved' ? 'Approved' : 'Rejected',
+          comment: ''
+        });
+      } else {
+        alert('You do not have permission to approve leaves');
+        return;
+      }
+
+      setSelectedLeaves(new Set());
+      await fetchLeaves();
+      alert(`Successfully ${status} ${leaveIds.length} leave application(s)`);
+    } catch (err: any) {
+      console.error('Failed to bulk update leaves:', err);
+      const errorMsg = err.response?.data?.error || err.response?.data?.message || 'Failed to update leave applications';
+      alert(errorMsg);
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  // Loading state
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -203,6 +270,45 @@ export default function ApprovalsPage() {
         <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg flex items-center gap-2 text-sm">
           <AlertCircle className="w-4 h-4" />
           <span style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>{error}</span>
+        </div>
+      )}
+
+      {/* Bulk Actions - Only show if there are pending leaves and user can approve */}
+      {filter === 'pending' && leaves.length > 0 && (userRole === 'hod' || userRole === 'admin') && (
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                checked={selectedLeaves.size === leaves.length && leaves.length > 0}
+                onChange={handleSelectAll}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                {selectedLeaves.size > 0 ? `${selectedLeaves.size} selected` : 'Select all'}
+              </span>
+            </div>
+            {selectedLeaves.size > 0 && (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleBulkApproval('approved')}
+                  disabled={bulkLoading}
+                  className="px-4 py-2 bg-green-600 text-white rounded-md font-semibold hover:bg-green-700 transition-all text-xs flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  Approve Selected ({selectedLeaves.size})
+                </button>
+                <button
+                  onClick={() => handleBulkApproval('rejected')}
+                  disabled={bulkLoading}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md font-semibold hover:bg-red-700 transition-all text-xs flex items-center justify-center gap-1.5 disabled:opacity-50"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  Reject Selected ({selectedLeaves.size})
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -274,10 +380,21 @@ export default function ApprovalsPage() {
           return (
             <div
               key={leave.id || leave._id}
-              className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-all"
+              className={`bg-white rounded-lg border p-4 hover:shadow-md transition-all ${
+                selectedLeaves.has(leave.id || leave._id) ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+              }`}
             >
               {/* Header with Employee Info */}
               <div className="flex items-start justify-between mb-3">
+                {/* Checkbox for bulk selection - Only show for pending leaves */}
+                {canApprove && filter === 'pending' && (
+                  <input
+                    type="checkbox"
+                    checked={selectedLeaves.has(leave.id || leave._id)}
+                    onChange={() => handleSelectLeave(leave.id || leave._id)}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mt-1 mr-2"
+                  />
+                )}
                 <div className="flex items-center gap-3 flex-1 min-w-0">
                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
                     {employeeName.charAt(0).toUpperCase()}

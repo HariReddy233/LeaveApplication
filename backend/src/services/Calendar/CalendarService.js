@@ -31,6 +31,10 @@ export const GetCalendarViewService = async (Request) => {
       la.leave_type,
       la.start_date,
       la.end_date,
+      la.number_of_days,
+      la.reason,
+      la.hod_status,
+      la.admin_status,
       la.status,
       COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
       u.email,
@@ -39,7 +43,9 @@ export const GetCalendarViewService = async (Request) => {
     FROM leave_applications la
     JOIN employees e ON la.employee_id = e.employee_id
     JOIN users u ON e.user_id = u.user_id
-    WHERE la.hod_status = 'Approved' AND la.admin_status = 'Approved'
+    WHERE (la.hod_status = 'Approved' OR la.admin_status = 'Approved')
+    AND la.hod_status != 'Rejected'
+    AND la.admin_status != 'Rejected'
   `;
   
   const params = [];

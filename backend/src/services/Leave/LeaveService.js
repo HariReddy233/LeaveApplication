@@ -38,13 +38,42 @@ export const CreateLeaveService = async (Request) => {
     empId = empResult.rows[0].employee_id;
   }
 
+  // Check for overlapping leave dates (only for pending or approved leaves)
+  const overlapCheck = await database.query(
+    `SELECT id, leave_type, start_date, end_date, hod_status, admin_status
+     FROM leave_applications
+     WHERE employee_id = $1
+     AND (
+       (hod_status = 'Pending' OR hod_status = 'Approved')
+       OR (admin_status = 'Pending' OR admin_status = 'Approved')
+     )
+     AND (
+       (start_date <= $2 AND end_date >= $2)
+       OR (start_date <= $3 AND end_date >= $3)
+       OR (start_date >= $2 AND end_date <= $3)
+     )`,
+    [empId, start_date, end_date]
+  );
+
+  if (overlapCheck.rows.length > 0) {
+    const overlappingLeave = overlapCheck.rows[0];
+    throw CreateError(
+      `You already have a ${overlappingLeave.leave_type} leave from ${overlappingLeave.start_date} to ${overlappingLeave.end_date} that is ${overlappingLeave.hod_status === 'Approved' && overlappingLeave.admin_status === 'Approved' ? 'approved' : 'pending'}. Please select different dates.`,
+      400
+    );
+  }
+
   // Set initial statuses based on role (matching HR Portal)
   // If HOD creates leave, HOD status is auto-approved
-  // If Admin creates leave, both are auto-approved
-  const hodStatus = (Role === 'hod' || Role === 'HOD') ? 'Approved' : 'Pending';
-  const adminStatus = (Role === 'admin' || Role === 'ADMIN') ? 'Approved' : 'Pending';
-  const hodRemark = (Role === 'hod' || Role === 'HOD') ? 'Autoapproved' : null;
-  const adminRemark = (Role === 'admin' || Role === 'ADMIN') ? 'Autoapproved' : null;
+  // If Admin creates leave, both are auto-approved and status is 'Approved'
+  const isAdmin = (Role === 'admin' || Role === 'ADMIN');
+  const isHod = (Role === 'hod' || Role === 'HOD');
+  const hodStatus = isHod ? 'Approved' : 'Pending';
+  const adminStatus = isAdmin ? 'Approved' : 'Pending';
+  const hodRemark = isHod ? 'Autoapproved' : null;
+  const adminRemark = isAdmin ? 'Autoapproved' : null;
+  // Admin leaves are fully approved immediately
+  const finalStatus = isAdmin ? 'Approved' : 'pending';
 
   const result = await database.query(
     `INSERT INTO leave_applications (
@@ -52,10 +81,10 @@ export const CreateLeaveService = async (Request) => {
       reason, status, hod_status, admin_status, hod_remark, admin_remark,
       applied_date, created_at
     )
-     VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9, $10, NOW(), NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
      RETURNING *`,
     [empId, leave_type, start_date, end_date, numDays, reason || leave_details || null, 
-     hodStatus, adminStatus, hodRemark, adminRemark]
+     finalStatus, hodStatus, adminStatus, hodRemark, adminRemark]
   );
 
   const leave = result.rows[0];
@@ -292,6 +321,44 @@ export const CreateLeaveService = async (Request) => {
               reason: reason || leave_details || null
             }).catch((adminEmailErr) => {
               console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+            });
+          }
+        }
+      }
+      // If Admin applies leave, send organization-wide notification
+      else if (isAdmin && finalStatus === 'Approved') {
+        const { sendLeaveApprovalEmail } = await import('../../utils/emailService.js');
+        
+        // Get all active users for organization-wide notification
+        const allUsersResult = await database.query(
+          `SELECT email, 
+           COALESCE(
+             NULLIF(TRIM(first_name || ' ' || last_name), ''),
+             first_name,
+             last_name,
+             email
+           ) as full_name
+           FROM users 
+           WHERE (status = 'Active' OR status IS NULL)
+           AND email != $1
+           LIMIT 100`,
+          [employee.employee_email]
+        );
+
+        // Send notification email to all users (non-blocking)
+        for (const user of allUsersResult.rows) {
+          if (user.email) {
+            sendLeaveApprovalEmail({
+              employee_email: user.email,
+              employee_name: user.full_name,
+              leave_type: leave_type,
+              start_date: start_date,
+              end_date: end_date,
+              number_of_days: numDays,
+              status: 'Approved',
+              remark: `Admin leave approved for ${employee.employee_name}. This is an organization-wide notification.`
+            }, employee.employee_name).catch((emailErr) => {
+              console.error(`Failed to send org-wide notification to ${user.email}:`, emailErr.message);
             });
           }
         }
@@ -923,28 +990,28 @@ export const ApproveLeaveHodService = async (Request) => {
     [finalStatus, id]
   );
 
-  // If approved, update leave balance (only when both HOD and Admin have approved)
-  if (finalStatus === 'Approved' && hodStatus === 'Approved' && adminStatus === 'Approved') {
-    // Check if balance was already updated (to avoid double deduction)
-    const wasAlreadyApproved = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved');
+  // If approved, update leave balance (when at least one approval exists: HOD OR Admin)
+  // Update balance if this is the first approval (to avoid double deduction)
+  const wasHodApproved = leave.hod_status === 'Approved';
+  const wasAdminApproved = leave.admin_status === 'Approved';
+  const isFirstApproval = !wasHodApproved && !wasAdminApproved && (hodStatus === 'Approved' || adminStatus === 'Approved');
+  
+  if (isFirstApproval && (hodStatus === 'Approved' || adminStatus === 'Approved')) {
+    const year = new Date(leave.start_date).getFullYear();
     
-    if (!wasAlreadyApproved) {
-      const year = new Date(leave.start_date).getFullYear();
-      
-      // Update or insert leave balance
-      // When a leave is approved, deduct the days from remaining balance
-      // remaining_balance is a GENERATED column, so it will auto-calculate as total_balance - used_balance
-      await database.query(
-        `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
-         VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
-         ON CONFLICT (employee_id, leave_type, year) 
-         DO UPDATE SET 
-           used_balance = leave_balance.used_balance + $4,
-           updated_at = NOW()`,
-        [leave.employee_id, leave.leave_type, year, leave.number_of_days]
-      );
-      
-    }
+    // Update or insert leave balance
+    // When a leave is approved, deduct the days from remaining balance
+    await database.query(
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+       VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
+       ON CONFLICT (employee_id, leave_type, year) 
+       DO UPDATE SET 
+         used_balance = leave_balance.used_balance + $4,
+         updated_at = NOW()`,
+      [leave.employee_id, leave.leave_type, year, leave.number_of_days]
+    );
+    
+    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days)`);
   }
 
   // Get approver name
@@ -982,6 +1049,48 @@ export const ApproveLeaveHodService = async (Request) => {
       .catch((emailError) => {
         console.error('Email sending failed:', emailError);
       });
+
+    // If approved, send organization-wide notification to all users
+    if (finalStatus === 'Approved') {
+      try {
+        // Get all active users for organization-wide notification
+        const allUsersResult = await database.query(
+          `SELECT email, 
+           COALESCE(
+             NULLIF(TRIM(first_name || ' ' || last_name), ''),
+             first_name,
+             last_name,
+             email
+           ) as full_name
+           FROM users 
+           WHERE (status = 'Active' OR status IS NULL)
+           AND email != $1
+           LIMIT 100`,
+          [leave.employee_email]
+        );
+
+        // Send notification email to all users (non-blocking)
+        for (const user of allUsersResult.rows) {
+          if (user.email) {
+            sendLeaveApprovalEmail({
+              employee_email: user.email,
+              employee_name: user.full_name,
+              leave_type: leave.leave_type,
+              start_date: leave.start_date,
+              end_date: leave.end_date,
+              number_of_days: leave.number_of_days,
+              status: 'Approved',
+              remark: `Leave approved for ${leave.employee_name}. This is an organization-wide notification.`
+            }, approverName).catch((emailErr) => {
+              console.error(`Failed to send org-wide notification to ${user.email}:`, emailErr.message);
+            });
+          }
+        }
+      } catch (orgEmailError) {
+        console.error('Failed to send organization-wide notifications:', orgEmailError);
+        // Don't fail the approval if org-wide email fails
+      }
+    }
   }
 
   // Send real-time SSE event for leave status update
@@ -1109,6 +1218,12 @@ export const ApproveLeaveAdminService = async (Request) => {
 
   const leave = leaveResult.rows[0];
 
+  // ENFORCEMENT RULE: If HOD has rejected, Admin cannot approve
+  // Rejected leaves should be final unless the employee submits a new request
+  if (leave.hod_status === 'Rejected' && status === 'Approved') {
+    throw CreateError("Cannot approve leave: HOD has already rejected this leave application. The employee must submit a new request.", 400);
+  }
+
   // Update Admin status
   // Ensure empId is an integer or null, and comment is null if empty
   const approvedByAdmin = empId ? parseInt(empId) : null;
@@ -1153,28 +1268,28 @@ export const ApproveLeaveAdminService = async (Request) => {
     [finalStatus, id]
   );
 
-  // If approved, update leave balance (only when both HOD and Admin have approved)
-  if (finalStatus === 'Approved' && hodStatus === 'Approved' && adminStatus === 'Approved') {
-    // Check if balance was already updated (to avoid double deduction)
-    const wasAlreadyApproved = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved');
+  // If approved, update leave balance (when at least one approval exists: HOD OR Admin)
+  // Update balance if this is the first approval (to avoid double deduction)
+  const wasHodApproved = leave.hod_status === 'Approved';
+  const wasAdminApproved = leave.admin_status === 'Approved';
+  const isFirstApproval = !wasHodApproved && !wasAdminApproved && (hodStatus === 'Approved' || adminStatus === 'Approved');
+  
+  if (isFirstApproval && (hodStatus === 'Approved' || adminStatus === 'Approved')) {
+    const year = new Date(leave.start_date).getFullYear();
     
-    if (!wasAlreadyApproved) {
-      const year = new Date(leave.start_date).getFullYear();
-      
-      // Update or insert leave balance
-      // When a leave is approved, deduct the days from remaining balance
-      // remaining_balance is a GENERATED column, so it will auto-calculate as total_balance - used_balance
-      await database.query(
-        `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
-         VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
-         ON CONFLICT (employee_id, leave_type, year) 
-         DO UPDATE SET 
-           used_balance = leave_balance.used_balance + $4,
-           updated_at = NOW()`,
-        [leave.employee_id, leave.leave_type, year, leave.number_of_days]
-      );
-      
-    }
+    // Update or insert leave balance
+    // When a leave is approved, deduct the days from remaining balance
+    await database.query(
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+       VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
+       ON CONFLICT (employee_id, leave_type, year) 
+       DO UPDATE SET 
+         used_balance = leave_balance.used_balance + $4,
+         updated_at = NOW()`,
+      [leave.employee_id, leave.leave_type, year, leave.number_of_days]
+    );
+    
+    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days)`);
   }
 
   // Get approver name
@@ -1212,6 +1327,48 @@ export const ApproveLeaveAdminService = async (Request) => {
       .catch((emailError) => {
         console.error('Email sending failed:', emailError);
       });
+
+    // If approved, send organization-wide notification to all users
+    if (finalStatus === 'Approved') {
+      try {
+        // Get all active users for organization-wide notification
+        const allUsersResult = await database.query(
+          `SELECT email, 
+           COALESCE(
+             NULLIF(TRIM(first_name || ' ' || last_name), ''),
+             first_name,
+             last_name,
+             email
+           ) as full_name
+           FROM users 
+           WHERE (status = 'Active' OR status IS NULL)
+           AND email != $1
+           LIMIT 100`,
+          [leave.employee_email]
+        );
+
+        // Send notification email to all users (non-blocking)
+        for (const user of allUsersResult.rows) {
+          if (user.email) {
+            sendLeaveApprovalEmail({
+              employee_email: user.email,
+              employee_name: user.full_name,
+              leave_type: leave.leave_type,
+              start_date: leave.start_date,
+              end_date: leave.end_date,
+              number_of_days: leave.number_of_days,
+              status: 'Approved',
+              remark: `Leave approved for ${leave.employee_name}. This is an organization-wide notification.`
+            }, approverName).catch((emailErr) => {
+              console.error(`Failed to send org-wide notification to ${user.email}:`, emailErr.message);
+            });
+          }
+        }
+      } catch (orgEmailError) {
+        console.error('Failed to send organization-wide notifications:', orgEmailError);
+        // Don't fail the approval if org-wide email fails
+      }
+    }
   }
 
   // Send real-time SSE event for leave status update
@@ -1506,6 +1663,61 @@ export const FilterLeaveByStatusHodService = async (Request) => {
 };
 
 /**
+ * Check for Overlapping Leave Dates
+ * Returns overlapping leaves for the given date range
+ */
+export const CheckOverlappingLeavesService = async (Request) => {
+  const UserId = Request.UserId;
+  const { start_date, end_date, leave_id } = Request.body || Request.query;
+
+  if (!start_date || !end_date) {
+    throw CreateError("Start date and end date are required", 400);
+  }
+
+  // Get employee_id from user_id
+  const empResult = await database.query(
+    'SELECT employee_id FROM employees WHERE user_id = $1 LIMIT 1',
+    [UserId]
+  );
+  if (empResult.rows.length === 0) {
+    throw CreateError("Employee record not found", 404);
+  }
+  const empId = empResult.rows[0].employee_id;
+
+  // Check for overlapping leaves (pending or approved only)
+  // Exclude the current leave if updating (leave_id provided)
+  let query = `
+    SELECT id, leave_type, start_date, end_date, hod_status, admin_status
+    FROM leave_applications
+    WHERE employee_id = $1
+    AND (
+      (hod_status = 'Pending' OR hod_status = 'Approved')
+      OR (admin_status = 'Pending' OR admin_status = 'Approved')
+    )
+    AND (
+      (start_date <= $2 AND end_date >= $2)
+      OR (start_date <= $3 AND end_date >= $3)
+      OR (start_date >= $2 AND end_date <= $3)
+    )
+  `;
+  
+  const params = [empId, start_date, end_date];
+  
+  // Exclude current leave if updating
+  if (leave_id) {
+    query += ` AND id != $4`;
+    params.push(leave_id);
+  }
+
+  const result = await database.query(query, params);
+  
+  return {
+    hasOverlap: result.rows.length > 0,
+    overlappingLeaves: result.rows
+  };
+};
+
+/**
  * Get Leave Balance
  */
 export const GetLeaveBalanceService = async (Request) => {
@@ -1537,6 +1749,104 @@ export const GetLeaveBalanceService = async (Request) => {
   );
 
   return result.rows;
+};
+
+/**
+ * Bulk Approve/Reject Leaves (HOD)
+ * Processes multiple leave applications in one action
+ * All validations apply individually to each leave request
+ */
+export const BulkApproveLeaveHodService = async (Request) => {
+  const { leave_ids, status, comment } = Request.body;
+  const Role = Request.Role || '';
+
+  if (!Array.isArray(leave_ids) || leave_ids.length === 0) {
+    throw CreateError("leave_ids array is required and must not be empty", 400);
+  }
+
+  if (!['Approved', 'Rejected'].includes(status)) {
+    throw CreateError("Invalid status. Must be 'Approved' or 'Rejected'", 400);
+  }
+
+  const results = [];
+  const errors = [];
+
+  // Process each leave individually
+  for (const id of leave_ids) {
+    try {
+      const result = await ApproveLeaveHodService({
+        ...Request,
+        params: { id },
+        body: { status, comment }
+      });
+      results.push({ id, success: true, data: result });
+    } catch (error) {
+      errors.push({ 
+        id, 
+        success: false, 
+        error: error.message || 'Failed to process leave',
+        status: error.status || 500
+      });
+    }
+  }
+
+  return {
+    message: `Processed ${results.length} of ${leave_ids.length} leave applications`,
+    successful: results,
+    failed: errors,
+    total: leave_ids.length,
+    succeeded: results.length,
+    failed_count: errors.length
+  };
+};
+
+/**
+ * Bulk Approve/Reject Leaves (Admin)
+ * Processes multiple leave applications in one action
+ * All validations apply individually to each leave request
+ * Enforces HOD rejection rule: Cannot approve if HOD rejected
+ */
+export const BulkApproveLeaveAdminService = async (Request) => {
+  const { leave_ids, status, comment } = Request.body;
+
+  if (!Array.isArray(leave_ids) || leave_ids.length === 0) {
+    throw CreateError("leave_ids array is required and must not be empty", 400);
+  }
+
+  if (!['Approved', 'Rejected'].includes(status)) {
+    throw CreateError("Invalid status. Must be 'Approved' or 'Rejected'", 400);
+  }
+
+  const results = [];
+  const errors = [];
+
+  // Process each leave individually
+  for (const id of leave_ids) {
+    try {
+      const result = await ApproveLeaveAdminService({
+        ...Request,
+        params: { id },
+        body: { status, comment }
+      });
+      results.push({ id, success: true, data: result });
+    } catch (error) {
+      errors.push({ 
+        id, 
+        success: false, 
+        error: error.message || 'Failed to process leave',
+        status: error.status || 500
+      });
+    }
+  }
+
+  return {
+    message: `Processed ${results.length} of ${leave_ids.length} leave applications`,
+    successful: results,
+    failed: errors,
+    total: leave_ids.length,
+    succeeded: results.length,
+    failed_count: errors.length
+  };
 };
 
 // Note: All services are exported inline using 'export const'
