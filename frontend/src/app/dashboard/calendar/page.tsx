@@ -202,7 +202,7 @@ export default function CalendarPage() {
       </div>
 
       {/* Compact Filters - Reduced Height */}
-      <div className="bg-white rounded-lg border border-gray-200 p-3">
+      <div className="bg-white rounded-lg border border-gray-200 p-3 mb-3">
         <div className="flex items-center gap-4">
           <div className="flex-1 max-w-xs">
             <label htmlFor="employee-filter" className="block text-xs font-medium text-gray-700 mb-1">
@@ -426,9 +426,19 @@ export default function CalendarPage() {
                   const fromDate = startDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                   const toDate = endDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                   const daysCount = leave.number_of_days || Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-                  const status = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved') 
-                    ? 'Fully Approved' 
-                    : (leave.hod_status === 'Approved' ? 'Approved by HOD' : 'Approved by Admin');
+                  // Determine status with actual approver names
+                  let status = '';
+                  if (leave.hod_status === 'Approved' && leave.admin_status === 'Approved') {
+                    status = 'Fully Approved';
+                  } else if (leave.hod_status === 'Approved') {
+                    const approverName = leave.hod_approver_name || 'HOD';
+                    status = `Approved by ${approverName}`;
+                  } else if (leave.admin_status === 'Approved') {
+                    const approverName = leave.admin_approver_name || 'Admin';
+                    status = `Approved by ${approverName}`;
+                  } else {
+                    status = 'Pending';
+                  }
 
                   return (
                     <div key={leave.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">

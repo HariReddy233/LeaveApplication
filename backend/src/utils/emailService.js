@@ -45,7 +45,10 @@ export const sendLeaveApplicationEmail = async ({
   number_of_days,
   reason,
   hod_status = null,
-  hod_name = null
+  hod_name = null,
+  approveToken = null,
+  rejectToken = null,
+  baseUrl = null
 }) => {
   try {
     // Check if email is configured
@@ -270,11 +273,29 @@ export const sendLeaveApplicationEmail = async ({
                 ` : ''}
               </div>
               
+              ${approveToken && rejectToken ? `
+              <div class="action-buttons" style="margin: 24px 0; text-align: center;">
+                <a href="${baseUrl || 'http://localhost:3000'}/api/leave/email-approve?token=${approveToken}" 
+                   style="display: inline-block; background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
+                  ✅ Approve
+                </a>
+                <a href="${baseUrl || 'http://localhost:3000'}/api/leave/email-reject?token=${rejectToken}" 
+                   style="display: inline-block; background-color: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
+                  ❌ Reject
+                </a>
+              </div>
+              <div class="action-note" style="background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; padding: 12px; margin: 16px 0; text-align: center;">
+                <p class="action-note-text" style="color: #92400e; font-size: 12px; font-weight: 500;">
+                  ⚡ You can approve or reject this leave request directly from this email, or log in to the Leave Management Portal for more details.
+                </p>
+              </div>
+              ` : `
               <div class="action-note">
                 <p class="action-note-text">
                   ⚡ Please log in to the Leave Management Portal to review and approve this application.
                 </p>
               </div>
+              `}
             </div>
             <div class="footer">
               <p class="footer-text">

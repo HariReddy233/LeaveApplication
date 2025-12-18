@@ -97,6 +97,13 @@ export const getMenuItems = (userRole?: string): MenuItem[] => {
         icon: createIcon(FileText, 'w-5 h-5'),
         children: [
           {
+            key: 'NewLeave',
+            label: 'New Leave',
+            url: '/dashboard/apply-leave',
+            parentKey: 'Leave',
+            icon: createIcon(Circle, 'w-4 h-4'),
+          },
+          {
             key: 'LeaveList',
             label: 'Leave List',
             url: '/dashboard/leaves-admin',

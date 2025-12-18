@@ -16,6 +16,7 @@ import {
   BulkApproveLeaveHodService,
   BulkApproveLeaveAdminService,
 } from "../../services/Leave/LeaveService.js";
+import { EmailApprovalService } from "../../services/Leave/EmailApprovalService.js";
 
 /**
  * @desc Leave Create
@@ -243,6 +244,131 @@ export const BulkApprove = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Email-based Approval/Rejection
+ * @access public (via token)
+ * @route /api/v1/Leave/email-approve?token=xxx or /api/v1/Leave/email-reject?token=xxx
+ * @method GET
+ */
+export const EmailApprove = async (req, res, next) => {
+  try {
+    const result = await EmailApprovalService(req);
+    // Redirect to a success page or return JSON
+    // For now, return a simple HTML response that can be displayed
+    res.status(200).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Leave Request Processed</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          }
+          .container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 500px;
+          }
+          .success-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+          }
+          h1 {
+            color: #10b981;
+            margin-bottom: 16px;
+          }
+          p {
+            color: #6b7280;
+            line-height: 1.6;
+            margin-bottom: 24px;
+          }
+          .button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #4f46e5;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="success-icon">✅</div>
+          <h1>Leave Request Processed</h1>
+          <p>${result.message}</p>
+          <p style="font-size: 14px; color: #9ca3af;">You can close this window now.</p>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    // Return error page
+    res.status(error.status || 400).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Error Processing Leave Request</title>
+        <style>
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+          }
+          .container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 500px;
+          }
+          .error-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+          }
+          h1 {
+            color: #ef4444;
+            margin-bottom: 16px;
+          }
+          p {
+            color: #6b7280;
+            line-height: 1.6;
+            margin-bottom: 24px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="error-icon">❌</div>
+          <h1>Unable to Process Request</h1>
+          <p>${error.message || 'An error occurred while processing your request.'}</p>
+          <p style="font-size: 14px; color: #9ca3af;">This link may have expired or already been used. Please log in to the Leave Management Portal to review this request.</p>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+};
+
 export default {
   LeaveCreate,
   LeaveList,
@@ -259,5 +385,6 @@ export default {
   CheckOverlappingLeaves,
   BulkApproveHod,
   BulkApprove,
+  EmailApprove,
 };
 

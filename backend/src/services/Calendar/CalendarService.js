@@ -36,13 +36,35 @@ export const GetCalendarViewService = async (Request) => {
       la.hod_status,
       la.admin_status,
       la.status,
+      la.approved_by_hod,
+      la.approved_by_admin,
       COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
       u.email,
       COALESCE(e.location, u.department) as location,
-      COALESCE(e.team, u.department) as team
+      COALESCE(e.team, u.department) as team,
+      -- HOD approver name
+      COALESCE(
+        NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
+        hod_approver.first_name,
+        hod_approver.last_name,
+        hod_approver.email,
+        NULL
+      ) as hod_approver_name,
+      -- Admin approver name
+      COALESCE(
+        NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+        admin_approver.first_name,
+        admin_approver.last_name,
+        admin_approver.email,
+        NULL
+      ) as admin_approver_name
     FROM leave_applications la
     JOIN employees e ON la.employee_id = e.employee_id
     JOIN users u ON e.user_id = u.user_id
+    LEFT JOIN employees hod_emp ON la.approved_by_hod = hod_emp.employee_id
+    LEFT JOIN users hod_approver ON hod_emp.user_id = hod_approver.user_id
+    LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
+    LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
     WHERE (la.hod_status = 'Approved' OR la.admin_status = 'Approved')
     AND la.hod_status != 'Rejected'
     AND la.admin_status != 'Rejected'

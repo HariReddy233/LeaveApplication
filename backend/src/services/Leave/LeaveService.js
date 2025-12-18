@@ -2,6 +2,7 @@
 import database from "../../config/database.js";
 import { CreateError } from "../../helper/ErrorHandler.js";
 import sseService from "../SSE/SSEService.js";
+import { createApprovalTokens, getBaseUrl } from "../../utils/approvalToken.js";
 
 /**
  * Create Leave Application
@@ -271,31 +272,33 @@ export const CreateLeaveService = async (Request) => {
         // Send email to ASSIGNED HOD ONLY (not all HODs) - Non-blocking
         if (hodStatus === 'Pending' && hodResult && hodResult.rows.length > 0) {
           const hod = hodResult.rows[0];
-          // Send email asynchronously without blocking the response
-          sendLeaveApplicationEmail({
-            to: hod.email,
-            approver_name: hod.full_name,
-            employee_email: employee.employee_email,
-            employee_name: employee.employee_name,
-            leave_type: leave_type,
-            start_date: start_date,
-            end_date: end_date,
-            number_of_days: numDays,
-            reason: reason || leave_details || null
-          }).catch((emailErr) => {
-            console.error(`Failed to send email to HOD ${hod.email}:`, emailErr.message);
-          });
-        } else if (hodStatus === 'Pending') {
-          console.error(`❌ ERROR: No HOD found for employee ${employee.employee_email}. manager_id: ${employee.manager_id || 'NULL'}, department: ${employee.department || 'NULL'}, location: ${employee.location || 'NULL'}`);
-        }
-
-        // Send email to Admins - Non-blocking
-        if (adminStatus === 'Pending' && adminResult.rows.length > 0) {
-          for (const admin of adminResult.rows) {
+          // Generate approval tokens for HOD
+          try {
+            const tokens = await createApprovalTokens(leave.id, hod.email, 'hod');
+            const baseUrl = getBaseUrl();
             // Send email asynchronously without blocking the response
             sendLeaveApplicationEmail({
-              to: admin.email,
-              approver_name: admin.full_name,
+              to: hod.email,
+              approver_name: hod.full_name,
+              employee_email: employee.employee_email,
+              employee_name: employee.employee_name,
+              leave_type: leave_type,
+              start_date: start_date,
+              end_date: end_date,
+              number_of_days: numDays,
+              reason: reason || leave_details || null,
+              approveToken: tokens.approveToken,
+              rejectToken: tokens.rejectToken,
+              baseUrl: baseUrl
+            }).catch((emailErr) => {
+              console.error(`Failed to send email to HOD ${hod.email}:`, emailErr.message);
+            });
+          } catch (tokenError) {
+            console.error(`Failed to generate tokens for HOD ${hod.email}:`, tokenError.message);
+            // Send email without tokens as fallback
+            sendLeaveApplicationEmail({
+              to: hod.email,
+              approver_name: hod.full_name,
               employee_email: employee.employee_email,
               employee_name: employee.employee_name,
               leave_type: leave_type,
@@ -303,9 +306,55 @@ export const CreateLeaveService = async (Request) => {
               end_date: end_date,
               number_of_days: numDays,
               reason: reason || leave_details || null
-            }).catch((adminEmailErr) => {
-              console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+            }).catch((emailErr) => {
+              console.error(`Failed to send email to HOD ${hod.email}:`, emailErr.message);
             });
+          }
+        } else if (hodStatus === 'Pending') {
+          console.error(`❌ ERROR: No HOD found for employee ${employee.employee_email}. manager_id: ${employee.manager_id || 'NULL'}, department: ${employee.department || 'NULL'}, location: ${employee.location || 'NULL'}`);
+        }
+
+        // Send email to Admins - Non-blocking
+        if (adminStatus === 'Pending' && adminResult.rows.length > 0) {
+          for (const admin of adminResult.rows) {
+            // Generate approval tokens for Admin
+            try {
+              const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
+              const baseUrl = getBaseUrl();
+              // Send email asynchronously without blocking the response
+              sendLeaveApplicationEmail({
+                to: admin.email,
+                approver_name: admin.full_name,
+                employee_email: employee.employee_email,
+                employee_name: employee.employee_name,
+                leave_type: leave_type,
+                start_date: start_date,
+                end_date: end_date,
+                number_of_days: numDays,
+                reason: reason || leave_details || null,
+                approveToken: tokens.approveToken,
+                rejectToken: tokens.rejectToken,
+                baseUrl: baseUrl
+              }).catch((adminEmailErr) => {
+                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+              });
+            } catch (tokenError) {
+              console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
+              // Send email without tokens as fallback
+              sendLeaveApplicationEmail({
+                to: admin.email,
+                approver_name: admin.full_name,
+                employee_email: employee.employee_email,
+                employee_name: employee.employee_name,
+                leave_type: leave_type,
+                start_date: start_date,
+                end_date: end_date,
+                number_of_days: numDays,
+                reason: reason || leave_details || null
+              }).catch((adminEmailErr) => {
+                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+              });
+            }
           }
         }
       }
@@ -323,20 +372,44 @@ export const CreateLeaveService = async (Request) => {
         // Send email to Admins - Non-blocking
         if (adminResult.rows.length > 0) {
           for (const admin of adminResult.rows) {
-            // Send email asynchronously without blocking the response
-            sendLeaveApplicationEmail({
-              to: admin.email,
-              approver_name: admin.full_name,
-              employee_email: employee.employee_email,
-              employee_name: employee.employee_name,
-              leave_type: leave_type,
-              start_date: start_date,
-              end_date: end_date,
-              number_of_days: numDays,
-              reason: reason || leave_details || null
-            }).catch((adminEmailErr) => {
-              console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-            });
+            // Generate approval tokens for Admin
+            try {
+              const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
+              const baseUrl = getBaseUrl();
+              // Send email asynchronously without blocking the response
+              sendLeaveApplicationEmail({
+                to: admin.email,
+                approver_name: admin.full_name,
+                employee_email: employee.employee_email,
+                employee_name: employee.employee_name,
+                leave_type: leave_type,
+                start_date: start_date,
+                end_date: end_date,
+                number_of_days: numDays,
+                reason: reason || leave_details || null,
+                approveToken: tokens.approveToken,
+                rejectToken: tokens.rejectToken,
+                baseUrl: baseUrl
+              }).catch((adminEmailErr) => {
+                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+              });
+            } catch (tokenError) {
+              console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
+              // Send email without tokens as fallback
+              sendLeaveApplicationEmail({
+                to: admin.email,
+                approver_name: admin.full_name,
+                employee_email: employee.employee_email,
+                employee_name: employee.employee_name,
+                leave_type: leave_type,
+                start_date: start_date,
+                end_date: end_date,
+                number_of_days: numDays,
+                reason: reason || leave_details || null
+              }).catch((adminEmailErr) => {
+                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+              });
+            }
           }
         }
       }
@@ -1005,17 +1078,18 @@ export const ApproveLeaveHodService = async (Request) => {
     [finalStatus, id]
   );
 
-  // Update leave balance ONLY when leave is FULLY approved (both HOD and Admin approve)
-  // Check if this action makes the leave fully approved
-  const wasFullyApproved = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved');
-  const isNowFullyApproved = (hodStatus === 'Approved' && adminStatus === 'Approved');
+  // Update leave balance when EITHER HOD OR Admin approves (first approval)
+  // Check if this is the first approval (balance not yet deducted)
+  const wasHodApproved = leave.hod_status === 'Approved';
+  const wasAdminApproved = leave.admin_status === 'Approved';
+  const wasAlreadyDeducted = wasHodApproved || wasAdminApproved;
   
-  // Only update balance if it becomes fully approved now (wasn't before)
-  if (!wasFullyApproved && isNowFullyApproved) {
+  // Update balance if this is the first approval (HOD approves and balance not yet deducted)
+  if (hodStatus === 'Approved' && !wasAlreadyDeducted) {
     const year = new Date(leave.start_date).getFullYear();
     
     // Update or insert leave balance
-    // When a leave is fully approved, deduct the days from remaining balance
+    // Deduct the days from remaining balance on first approval
     await database.query(
       `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
        VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
@@ -1026,7 +1100,7 @@ export const ApproveLeaveHodService = async (Request) => {
       [leave.employee_id, leave.leave_type, year, leave.number_of_days]
     );
     
-    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - Fully approved`);
+    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - First approval by HOD`);
   }
 
   // Get approver name
@@ -1283,17 +1357,18 @@ export const ApproveLeaveAdminService = async (Request) => {
     [finalStatus, id]
   );
 
-  // Update leave balance ONLY when leave is FULLY approved (both HOD and Admin approve)
-  // Check if this action makes the leave fully approved
-  const wasFullyApproved = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved');
-  const isNowFullyApproved = (hodStatus === 'Approved' && adminStatus === 'Approved');
+  // Update leave balance when EITHER HOD OR Admin approves (first approval)
+  // Check if this is the first approval (balance not yet deducted)
+  const wasHodApproved = leave.hod_status === 'Approved';
+  const wasAdminApproved = leave.admin_status === 'Approved';
+  const wasAlreadyDeducted = wasHodApproved || wasAdminApproved;
   
-  // Only update balance if it becomes fully approved now (wasn't before)
-  if (!wasFullyApproved && isNowFullyApproved) {
+  // Update balance if this is the first approval (Admin approves and balance not yet deducted)
+  if (adminStatus === 'Approved' && !wasAlreadyDeducted) {
     const year = new Date(leave.start_date).getFullYear();
     
     // Update or insert leave balance
-    // When a leave is fully approved, deduct the days from remaining balance
+    // Deduct the days from remaining balance on first approval
     await database.query(
       `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
        VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
@@ -1304,7 +1379,7 @@ export const ApproveLeaveAdminService = async (Request) => {
       [leave.employee_id, leave.leave_type, year, leave.number_of_days]
     );
     
-    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - Fully approved`);
+    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - First approval by Admin`);
   }
 
   // Get approver name

@@ -442,13 +442,20 @@ export default function LeaveListTable({
 
         if (selectedStatus === 'Approved') {
           if (finalStatus === 'approved') return true;
-          return hodStatus.toLowerCase() === 'approved' && adminStatus.toLowerCase() === 'approved';
+          // Show if both HOD and Admin approved, or if at least one approved (for partial approvals)
+          return (hodStatus.toLowerCase() === 'approved' || adminStatus.toLowerCase() === 'approved') 
+            && hodStatus.toLowerCase() !== 'rejected' 
+            && adminStatus.toLowerCase() !== 'rejected';
         } else if (selectedStatus === 'Rejected') {
           if (finalStatus === 'rejected') return true;
+          // Show if either HOD or Admin rejected
           return hodStatus.toLowerCase() === 'rejected' || adminStatus.toLowerCase() === 'rejected';
         } else if (selectedStatus === 'Pending') {
           if (finalStatus === 'pending') return true;
-          return hodStatus.toLowerCase() === 'pending' && adminStatus.toLowerCase() === 'pending';
+          // Show if either HOD or Admin is still pending (and not rejected)
+          return (hodStatus.toLowerCase() === 'pending' || adminStatus.toLowerCase() === 'pending')
+            && hodStatus.toLowerCase() !== 'rejected'
+            && adminStatus.toLowerCase() !== 'rejected';
         }
         return false;
       });
@@ -553,10 +560,10 @@ export default function LeaveListTable({
           </div>
 
           {/* User Filter and Status Filter */}
-          <div className="mb-3 flex items-center gap-4 flex-wrap">
+          <div className="mb-4 flex items-center gap-4 flex-wrap">
             {(userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'hod') && (
-              <div className="flex items-center">
-                <label htmlFor="user-select" className="text-sm text-gray-700 mr-2">User :</label>
+              <div className="flex items-center gap-2">
+                <label htmlFor="user-select" className="text-sm font-medium text-gray-700 whitespace-nowrap">User:</label>
                 <select
                   id="user-select"
                   value={selectedUserId}
@@ -588,8 +595,8 @@ export default function LeaveListTable({
                 )}
               </div>
             )}
-            <div className="flex items-center">
-              <label htmlFor="status-select" className="text-sm text-gray-700 mr-2">Status :</label>
+            <div className="flex items-center gap-2">
+              <label htmlFor="status-select" className="text-sm font-medium text-gray-700 whitespace-nowrap">Status:</label>
               <select
                 id="status-select"
                 value={selectedStatus}

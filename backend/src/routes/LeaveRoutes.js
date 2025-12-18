@@ -119,6 +119,17 @@ LeaveRoutes.post(
   LeaveControllers.BulkApproveHod,
 );
 
+//Email-based Approval/Rejection (Public - no auth required, token-based)
+LeaveRoutes.get(
+  "/email-approve",
+  LeaveControllers.EmailApprove,
+);
+
+LeaveRoutes.get(
+  "/email-reject",
+  LeaveControllers.EmailApprove,
+);
+
 export default LeaveRoutes;
 
 
