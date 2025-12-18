@@ -187,6 +187,13 @@ const RegistrationService = async (Request) => {
         );
         console.log('✅ Employee record created successfully');
       } catch (empInsertError) {
+        // Log the full error for debugging
+        console.error('❌ Employee insert error details:', {
+          code: empInsertError.code,
+          message: empInsertError.message,
+          detail: empInsertError.detail,
+          constraint: empInsertError.constraint
+        });
         console.warn('⚠️ Employee insert with ON CONFLICT failed, trying simple INSERT:', empInsertError.message);
         // If ON CONFLICT doesn't work, try simple INSERT
         if (empInsertError.code === '42P01' || empInsertError.code === '42703' || empInsertError.message.includes('ON CONFLICT') || empInsertError.message.includes('column')) {
