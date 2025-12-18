@@ -90,10 +90,11 @@ const RegistrationService = async (Request) => {
     // If new schema fails, try old schema (id, full_name)
     if (insertError.code === '42703' || insertError.message.includes('column')) {
       try {
+        // Try with user_id instead of id (in case table uses user_id as primary key)
         userResult = await database.query(
           `INSERT INTO users (email, password_hash, full_name, role, status)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING id, email, full_name, role`,
+           RETURNING user_id, email, full_name, role`,
           [
             email.toLowerCase(),
             passwordHash,
@@ -104,7 +105,36 @@ const RegistrationService = async (Request) => {
         );
         
         if (userResult.rows.length > 0) {
-          userId = userResult.rows[0].id;
+          userId = userResult.rows[0].user_id || userResult.rows[0].id;
+        }
+        
+        // If still no userId, try with id column
+        if (!userId && userResult.rows.length > 0) {
+          try {
+            const idResult = await database.query(
+              `INSERT INTO users (email, password_hash, full_name, role, status)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING id, email, full_name, role`,
+              [
+                email.toLowerCase(),
+                passwordHash,
+                fullName,
+                normalizedRole,
+                'Active'
+              ]
+            );
+            if (idResult.rows.length > 0) {
+              userId = idResult.rows[0].id;
+              userResult = idResult;
+            }
+          } catch (idError) {
+            // If id column also doesn't exist, use user_id from first query
+            if (idError.code === '42703' || idError.message.includes('column') || idError.message.includes('does not exist')) {
+              userId = userResult.rows[0].user_id;
+            } else {
+              throw idError;
+            }
+          }
         }
       } catch (oldSchemaError) {
         // Handle duplicate email error in retry
