@@ -427,17 +427,34 @@ export default function CalendarPage() {
                   const toDate = endDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                   const daysCount = leave.number_of_days || Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
                   // Determine status with actual approver names
+                  // Determine status - For Admin, only show admin_status
                   let status = '';
-                  if (leave.hod_status === 'Approved' && leave.admin_status === 'Approved') {
-                    status = 'Fully Approved';
-                  } else if (leave.hod_status === 'Approved') {
-                    const approverName = leave.hod_approver_name || 'HOD';
-                    status = `Approved by ${approverName}`;
-                  } else if (leave.admin_status === 'Approved') {
-                    const approverName = leave.admin_approver_name || 'Admin';
-                    status = `Approved by ${approverName}`;
+                  const userRole = typeof window !== 'undefined' ? localStorage.getItem('userRole')?.toLowerCase() : '';
+                  const isAdmin = userRole === 'admin';
+                  
+                  if (isAdmin) {
+                    // Admin view: Only show admin status
+                    if (leave.admin_status === 'Approved') {
+                      const approverName = leave.admin_approver_name || 'Admin';
+                      status = `Approved by ${approverName}`;
+                    } else if (leave.admin_status === 'Rejected') {
+                      status = 'Rejected';
+                    } else {
+                      status = 'Pending';
+                    }
                   } else {
-                    status = 'Pending';
+                    // HOD/Employee view: Show combined status
+                    if (leave.hod_status === 'Approved' && leave.admin_status === 'Approved') {
+                      status = 'Fully Approved';
+                    } else if (leave.hod_status === 'Approved') {
+                      const approverName = leave.hod_approver_name || 'HOD';
+                      status = `Approved by ${approverName}`;
+                    } else if (leave.admin_status === 'Approved') {
+                      const approverName = leave.admin_approver_name || 'Admin';
+                      status = `Approved by ${approverName}`;
+                    } else {
+                      status = 'Pending';
+                    }
                   }
 
                   return (

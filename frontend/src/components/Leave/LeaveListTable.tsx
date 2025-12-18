@@ -517,8 +517,14 @@ export default function LeaveListTable({
         comment: 'Approved by Admin'
       });
       
-      // Refresh the list
+      // Force refresh the list - clear cache and refetch
+      setLeaves([]);
+      setAllLeaves([]);
       await fetchLeaves();
+      // Also trigger a small delay to ensure backend has updated
+      setTimeout(() => {
+        fetchLeaves();
+      }, 500);
       alert('Leave approved successfully! Organization has been notified.');
     } catch (err: any) {
       console.error('Failed to approve leave:', err);
@@ -540,8 +546,14 @@ export default function LeaveListTable({
         comment: comment || 'Rejected by Admin'
       });
       
-      // Refresh the list
+      // Force refresh the list - clear cache and refetch
+      setLeaves([]);
+      setAllLeaves([]);
       await fetchLeaves();
+      // Also trigger a small delay to ensure backend has updated
+      setTimeout(() => {
+        fetchLeaves();
+      }, 500);
       alert('Leave rejected successfully!');
     } catch (err: any) {
       console.error('Failed to reject leave:', err);

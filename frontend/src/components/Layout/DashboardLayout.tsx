@@ -176,21 +176,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="flex flex-col h-full">
           {/* Logo Section - Fixed at top */}
           <div className="flex items-center gap-3 px-6 pt-6 pb-4 flex-shrink-0">
-            {/* Menu icon lines - Toggle sidebar */}
+            {/* Hamburger menu - 3 lines icon */}
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="text-gray-600 hover:text-gray-900 transition-colors flex items-center p-1"
+              className="text-gray-600 hover:text-gray-900 transition-colors flex flex-col gap-1 p-1"
               aria-label="Toggle sidebar"
             >
-              <MenuIcon className="w-5 h-5" />
+              <div className="w-5 h-0.5 bg-gray-600"></div>
+              <div className="w-5 h-0.5 bg-gray-600"></div>
+              <div className="w-5 h-0.5 bg-gray-600"></div>
             </button>
-            {/* Consultare text/logo */}
+            {/* Consultare text/logo - Reduced size */}
             {!imageError ? (
               <Image
                 src="/consultare-logo.png"
                 alt="Consultare Logo"
-                width={120}
-                height={35}
+                width={100}
+                height={28}
                 className="object-contain"
                 priority
                 unoptimized
@@ -200,13 +202,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 }}
               />
             ) : (
-              <h1 className="text-lg font-semibold text-gray-900" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+              <h1 className="text-base font-semibold text-gray-900" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
                 Consultare
               </h1>
             )}
           </div>
-          {/* Border line below logo - same as header line */}
-          <div className="border-b border-gray-200"></div>
+          {/* Horizontal divider line below logo - consistent width and alignment */}
+          <div className="border-b border-gray-200 mx-6"></div>
 
           {/* Navigation - Scrollable with visible scrollbar */}
           <nav 
@@ -307,6 +309,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <span className="font-medium hidden md:inline whitespace-nowrap">{user?.full_name || user?.email || 'User'}</span>
                 <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ${userMenuOpen ? 'rotate-180' : ''}`} />
               </button>
+              {/* Horizontal divider line below user profile - consistent width and alignment */}
+              {userMenuOpen && (
+                <div className="absolute right-0 top-full w-full border-b border-gray-200 mt-2"></div>
+              )}
 
               {/* User Dropdown Menu */}
               {userMenuOpen && (

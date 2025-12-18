@@ -448,18 +448,22 @@ export default function ApprovalsPage() {
                 )}
               </div>
 
-              {/* Status Badges */}
+              {/* Status Badges - Hide HOD Status for Admin */}
               <div className="flex items-center gap-4 mb-3 pb-3 border-b border-gray-100">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-gray-500">HOD:</span>
-                  <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', {
-                    'bg-green-100 text-green-700': hodStatus.toLowerCase() === 'approved',
-                    'bg-yellow-100 text-yellow-700': hodStatus.toLowerCase() === 'pending',
-                    'bg-red-100 text-red-700': hodStatus.toLowerCase() === 'rejected',
-                  })}>
-                    {hodStatus}
-                  </span>
-                </div>
+                {/* Only show HOD Status if user is HOD */}
+                {userRole === 'hod' && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-gray-500">HOD:</span>
+                    <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', {
+                      'bg-green-100 text-green-700': hodStatus.toLowerCase() === 'approved',
+                      'bg-yellow-100 text-yellow-700': hodStatus.toLowerCase() === 'pending',
+                      'bg-red-100 text-red-700': hodStatus.toLowerCase() === 'rejected',
+                    })}>
+                      {hodStatus}
+                    </span>
+                  </div>
+                )}
+                {/* Always show Admin Status */}
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-gray-500">Admin:</span>
                   <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', {
