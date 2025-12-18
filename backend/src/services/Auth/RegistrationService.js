@@ -139,14 +139,21 @@ const RegistrationService = async (Request) => {
 
   // Create employee record if it doesn't exist
   // This is needed for the employee to appear in employee lists and leave management
+  // Wrap in try-catch to prevent registration failure if employee record creation fails
   try {
     // Check if employee record already exists
-    const existingEmployee = await database.query(
-      'SELECT employee_id FROM employees WHERE user_id = $1',
-      [userId]
-    );
+    let existingEmployee;
+    try {
+      existingEmployee = await database.query(
+        'SELECT employee_id FROM employees WHERE user_id = $1',
+        [userId]
+      );
+    } catch (checkError) {
+      console.warn('Could not check existing employee record:', checkError.message);
+      existingEmployee = { rows: [] };
+    }
 
-    if (existingEmployee.rows.length === 0) {
+    if (!existingEmployee || existingEmployee.rows.length === 0) {
       // Get HOD employee_id if hod_id is provided
       let hodEmployeeId = null;
       if (hod_id) {
@@ -178,9 +185,11 @@ const RegistrationService = async (Request) => {
             hodEmployeeId // manager_id (HOD)
           ]
         );
+        console.log('✅ Employee record created successfully');
       } catch (empInsertError) {
+        console.warn('⚠️ Employee insert with ON CONFLICT failed, trying simple INSERT:', empInsertError.message);
         // If ON CONFLICT doesn't work, try simple INSERT
-        if (empInsertError.code === '42P01' || empInsertError.message.includes('ON CONFLICT')) {
+        if (empInsertError.code === '42P01' || empInsertError.code === '42703' || empInsertError.message.includes('ON CONFLICT') || empInsertError.message.includes('column')) {
           try {
             await database.query(
               `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
@@ -194,7 +203,9 @@ const RegistrationService = async (Request) => {
                 hodEmployeeId
               ]
             );
+            console.log('✅ Employee record created with simple INSERT');
           } catch (simpleInsertError) {
+            console.warn('⚠️ Simple INSERT failed, trying minimal insert:', simpleInsertError.message);
             // If that fails due to missing columns, try minimal insert
             if (simpleInsertError.code === '42703' || simpleInsertError.message.includes('column')) {
               try {
@@ -203,21 +214,33 @@ const RegistrationService = async (Request) => {
                    VALUES ($1, $2)`,
                   [userId, normalizedRole]
                 );
+                console.log('✅ Employee record created with minimal fields');
               } catch (minInsertError) {
-                console.warn('Could not create employee record:', minInsertError.message);
+                console.warn('⚠️ Could not create employee record (minimal insert failed):', minInsertError.message);
                 // Don't fail registration if employee record creation fails
+                // The employee record can be created later via UpdateEmployee
               }
+            } else if (simpleInsertError.code === '23505') {
+              // Unique constraint violation - employee record already exists, that's okay
+              console.log('ℹ️ Employee record already exists (unique constraint)');
             } else {
-              console.warn('Could not create employee record:', simpleInsertError.message);
+              console.warn('⚠️ Could not create employee record:', simpleInsertError.message);
+              // Don't fail registration
             }
           }
+        } else if (empInsertError.code === '23505') {
+          // Unique constraint violation - employee record already exists, that's okay
+          console.log('ℹ️ Employee record already exists (unique constraint)');
         } else {
-          console.warn('Could not create employee record:', empInsertError.message);
+          console.warn('⚠️ Could not create employee record:', empInsertError.message);
+          // Don't fail registration
         }
       }
+    } else {
+      console.log('ℹ️ Employee record already exists');
     }
   } catch (empError) {
-    console.warn('Error creating employee record:', empError.message);
+    console.warn('⚠️ Error in employee record creation (non-fatal):', empError.message);
     // Don't fail registration if employee record creation fails
     // The employee record can be created later via UpdateEmployee
   }
