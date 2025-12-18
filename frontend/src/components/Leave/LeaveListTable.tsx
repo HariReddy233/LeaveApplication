@@ -254,12 +254,11 @@ export default function LeaveListTable({
       setLoading(true);
       console.log('🔄 fetchLeaves called:', { 
         selectedUserId, 
-        status, 
+        selectedStatus,
         endpoint, 
         method,
         pageNumber,
-        perPage,
-        searchKey
+        perPage
       });
       
       // Don't fetch if current user is not loaded yet
