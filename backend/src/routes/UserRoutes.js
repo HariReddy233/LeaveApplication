@@ -76,6 +76,14 @@ UserRoutes.get(
   UserControllers.AdminsList,
 );
 
+//Delete Employee (Admin only)
+UserRoutes.delete(
+  "/DeleteEmployee/:userId",
+  CheckEmployeeAuth,
+  CheckAdminAuth,
+  UserControllers.DeleteEmployee,
+);
+
 export default UserRoutes;
 
 

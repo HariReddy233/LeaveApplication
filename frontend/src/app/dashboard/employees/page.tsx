@@ -5,16 +5,30 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api';
 import PageTitle from '@/components/Common/PageTitle';
+import { Trash2 } from 'lucide-react';
 
 export default function EmployeesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string>('');
 
   useEffect(() => {
+    fetchUserRole();
     fetchEmployees();
   }, []);
+
+  const fetchUserRole = async () => {
+    try {
+      const response = await api.get('/Auth/Me');
+      if (response.data?.user?.role) {
+        setUserRole(response.data.user.role.toLowerCase());
+      }
+    } catch (err) {
+      console.error('Failed to fetch user role:', err);
+    }
+  };
 
   // Refetch when page becomes visible (user navigates back)
   useEffect(() => {
@@ -88,6 +102,22 @@ export default function EmployeesPage() {
       setEmployees([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteEmployee = async (userId: number, employeeName: string) => {
+    if (!confirm(`Are you sure you want to delete employee "${employeeName}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await api.delete(`/User/DeleteEmployee/${userId}`);
+      alert('Employee deleted successfully!');
+      fetchEmployees();
+    } catch (err: any) {
+      console.error('Failed to delete employee:', err);
+      const errorMsg = err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to delete employee';
+      alert(errorMsg);
     }
   };
 
@@ -174,12 +204,25 @@ export default function EmployeesPage() {
                         )}
                       </td>
                       <td className="py-3">
-                        <Link
-                          href={`/dashboard/employees/edit/${employee.user_id || employee.id}`}
-                          className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                        >
-                          Edit
-                        </Link>
+                        <div className="flex items-center gap-3">
+                          <Link
+                            href={`/dashboard/employees/edit/${employee.user_id || employee.id}`}
+                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                          >
+                            Edit
+                          </Link>
+                          {/* Delete button - Admin only */}
+                          {userRole === 'admin' && (
+                            <button
+                              onClick={() => handleDeleteEmployee(employee.user_id || employee.id, employee.full_name || employee.email)}
+                              className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                              title="Delete Employee"
+                              aria-label="Delete employee"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

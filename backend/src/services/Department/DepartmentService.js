@@ -1,6 +1,7 @@
 //Internal Lib Import
 import database from "../../config/database.js";
 import { CreateError } from "../../helper/ErrorHandler.js";
+import { HashPassword } from "../../utility/BcryptHelper.js";
 
 /**
  * Get Department List (from departments table, with employee count)
@@ -112,6 +113,49 @@ export const CreateDepartmentService = async (Request) => {
     console.error('CreateDepartmentService error:', error);
     if (error.status) throw error;
     throw CreateError("Failed to create department", 500);
+  }
+};
+
+/**
+ * Delete Department (Admin only)
+ */
+export const DeleteDepartmentService = async (Request) => {
+  const { id } = Request.params;
+
+  if (!id) {
+    throw CreateError("Department ID is required", 400);
+  }
+
+  try {
+    // Check if department has employees
+    const employeeCheck = await database.query(
+      `SELECT COUNT(*) as count FROM employees WHERE team = (SELECT name FROM departments WHERE id = $1)`,
+      [id]
+    );
+
+    const employeeCount = parseInt(employeeCheck.rows[0]?.count || 0);
+    if (employeeCount > 0) {
+      throw CreateError(`Cannot delete department: ${employeeCount} employee(s) are assigned to this department. Please reassign employees first.`, 400);
+    }
+
+    // Soft delete by setting is_active = false
+    const result = await database.query(
+      `UPDATE departments SET is_active = false WHERE id = $1 RETURNING *`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      throw CreateError("Department not found", 404);
+    }
+
+    return {
+      message: "Department deleted successfully",
+      data: result.rows[0]
+    };
+  } catch (error) {
+    console.error('DeleteDepartmentService error:', error);
+    if (error.status) throw error;
+    throw CreateError("Failed to delete department", 500);
   }
 };
 

@@ -1,7 +1,8 @@
 //Internal Lib Import
 import {
   GetDepartmentListService,
-  CreateDepartmentService
+  CreateDepartmentService,
+  DeleteDepartmentService
 } from "../../services/Department/DepartmentService.js";
 
 /**
@@ -34,8 +35,24 @@ export const DepartmentCreate = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Delete Department
+ * @access private (Admin only)
+ * @route /api/v1/Department/DepartmentDelete/:id
+ * @method DELETE
+ */
+export const DepartmentDelete = async (req, res, next) => {
+  try {
+    const result = await DeleteDepartmentService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   DepartmentList,
   DepartmentCreate,
+  DepartmentDelete,
 };
 

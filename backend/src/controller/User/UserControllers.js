@@ -8,6 +8,7 @@ import {
   GetUsersForAvailabilityService,
   GetHodsListService,
   GetAdminsListService,
+  DeleteEmployeeService,
 } from "../../services/User/UserService.js";
 
 /**
@@ -140,6 +141,21 @@ export const AdminsList = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Delete Employee
+ * @access private (Admin only)
+ * @route /api/v1/User/DeleteEmployee/:userId
+ * @method DELETE
+ */
+export const DeleteEmployee = async (req, res, next) => {
+  try {
+    const result = await DeleteEmployeeService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   EmployeeList,
   UserProfile,
@@ -149,5 +165,6 @@ export default {
   UserListForAvailability,
   HodsList,
   AdminsList,
+  DeleteEmployee,
 };
 

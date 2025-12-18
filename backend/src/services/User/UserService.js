@@ -1719,3 +1719,67 @@ export const UpdateEmployeeService = async (Request) => {
   }
 };
 
+/**
+ * Delete Employee (Admin only)
+ */
+export const DeleteEmployeeService = async (Request) => {
+  const { userId } = Request.params;
+
+  if (!userId) {
+    throw CreateError("User ID is required", 400);
+  }
+
+  try {
+    // Check if user exists
+    const userResult = await database.query(
+      'SELECT user_id, email, role FROM users WHERE user_id = $1',
+      [userId]
+    );
+
+    if (userResult.rows.length === 0) {
+      throw CreateError("User not found", 404);
+    }
+
+    const user = userResult.rows[0];
+
+    // Check if user has pending leave applications
+    const leaveCheck = await database.query(
+      `SELECT COUNT(*) as count FROM leave_applications la
+       JOIN employees e ON la.employee_id = e.employee_id
+       WHERE e.user_id = $1 AND (la.hod_status = 'Pending' OR la.admin_status = 'Pending')`,
+      [userId]
+    );
+
+    const pendingLeaves = parseInt(leaveCheck.rows[0]?.count || 0);
+    if (pendingLeaves > 0) {
+      throw CreateError(`Cannot delete employee: ${pendingLeaves} pending leave application(s) exist. Please process or delete leaves first.`, 400);
+    }
+
+    // Delete employee record first (if exists)
+    try {
+      await database.query(
+        'DELETE FROM employees WHERE user_id = $1',
+        [userId]
+      );
+    } catch (empError) {
+      console.warn('Error deleting employee record:', empError.message);
+      // Continue even if employee record doesn't exist
+    }
+
+    // Soft delete user by setting status = 'Inactive'
+    const result = await database.query(
+      `UPDATE users SET status = 'Inactive', updated_at = NOW() WHERE user_id = $1 RETURNING user_id, email`,
+      [userId]
+    );
+
+    return {
+      message: "Employee deleted successfully",
+      data: result.rows[0]
+    };
+  } catch (error) {
+    console.error('DeleteEmployeeService error:', error);
+    if (error.status) throw error;
+    throw CreateError("Failed to delete employee", 500);
+  }
+};
+

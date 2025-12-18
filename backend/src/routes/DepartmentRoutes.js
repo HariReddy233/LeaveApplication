@@ -21,7 +21,16 @@ DepartmentRoutes.post(
   DepartmentControllers.DepartmentCreate,
 );
 
+//Delete Department (Admin only)
+DepartmentRoutes.delete(
+  "/DepartmentDelete/:id",
+  CheckEmployeeAuth,
+  CheckAdminAuth,
+  DepartmentControllers.DepartmentDelete,
+);
+
 export default DepartmentRoutes;
+
 
 
 

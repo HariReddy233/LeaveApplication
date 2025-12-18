@@ -5,16 +5,30 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api';
 import PageTitle from '@/components/Common/PageTitle';
+import { Trash2 } from 'lucide-react';
 
 export default function DepartmentsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [departments, setDepartments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string>('');
 
   useEffect(() => {
+    fetchUserRole();
     fetchDepartments();
   }, []);
+
+  const fetchUserRole = async () => {
+    try {
+      const response = await api.get('/Auth/Me');
+      if (response.data?.user?.role) {
+        setUserRole(response.data.user.role.toLowerCase());
+      }
+    } catch (err) {
+      console.error('Failed to fetch user role:', err);
+    }
+  };
 
   // Refetch when page becomes visible (user navigates back)
   useEffect(() => {
@@ -56,6 +70,22 @@ export default function DepartmentsPage() {
       setDepartments([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteDepartment = async (id: number, name: string) => {
+    if (!confirm(`Are you sure you want to delete the department "${name}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await api.delete(`/Department/DepartmentDelete/${id}`);
+      alert('Department deleted successfully!');
+      fetchDepartments();
+    } catch (err: any) {
+      console.error('Failed to delete department:', err);
+      const errorMsg = err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to delete department';
+      alert(errorMsg);
     }
   };
 
@@ -109,18 +139,31 @@ export default function DepartmentsPage() {
                       <td className="py-3 text-gray-700">{dept.description || '-'}</td>
                       <td className="py-3 text-gray-700">{dept.employee_count || 0}</td>
                       <td className="py-3">
-                        <button
-                          onClick={() => {
-                            const newName = prompt('Enter new department name:', dept.name);
-                            if (newName && newName.trim()) {
-                              // Note: Department editing would require updating employee team assignments
-                              alert('Department editing requires updating employee team assignments. This feature can be added if needed.');
-                            }
-                          }}
-                          className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                        >
-                          Edit
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => {
+                              const newName = prompt('Enter new department name:', dept.name);
+                              if (newName && newName.trim()) {
+                                // Note: Department editing would require updating employee team assignments
+                                alert('Department editing requires updating employee team assignments. This feature can be added if needed.');
+                              }
+                            }}
+                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                          >
+                            Edit
+                          </button>
+                          {/* Delete button - Admin only */}
+                          {userRole === 'admin' && (
+                            <button
+                              onClick={() => handleDeleteDepartment(dept.id, dept.name)}
+                              className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                              title="Delete Department"
+                              aria-label="Delete department"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
