@@ -137,7 +137,7 @@ const RegistrationService = async (Request) => {
   const user = userResult.rows[0];
   const userFullName = user.full_name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || email;
 
-  // Create employee record if it doesn't exist
+  // Create employee record if it doesn't exist (non-blocking - won't fail registration)
   // This is needed for the employee to appear in employee lists and leave management
   // Wrap in try-catch to prevent registration failure if employee record creation fails
   try {
