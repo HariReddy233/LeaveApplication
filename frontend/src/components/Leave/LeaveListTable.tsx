@@ -109,15 +109,26 @@ export default function LeaveListTable({
   }, [currentUser, userRole]);
 
   // Set default user after currentUser is loaded
+  // For Admin/HOD: Keep selectedUserId empty (shows "All Users")
+  // For Employees: Set to current user's ID
   useEffect(() => {
     if (currentUser && !selectedUserId) {
-      const userId = currentUser.id || currentUser.user_id || currentUser._id;
-      if (userId) {
-        console.log('👤 Setting default user to:', userId);
-        setSelectedUserId(userId.toString());
+      const role = userRole?.toLowerCase();
+      const isAdminOrHod = role === 'admin' || role === 'hod';
+      
+      // Only set to current user for regular employees
+      // Admin and HOD should start with "All Users" (empty selectedUserId)
+      if (!isAdminOrHod) {
+        const userId = currentUser.id || currentUser.user_id || currentUser._id;
+        if (userId) {
+          console.log('👤 Setting default user to:', userId);
+          setSelectedUserId(userId.toString());
+        }
+      } else {
+        console.log('👤 Admin/HOD - keeping selectedUserId empty for "All Users" view');
       }
     }
-  }, [currentUser, selectedUserId]);
+  }, [currentUser, selectedUserId, userRole]);
 
   // Fetch leaves when filters change (only after current user is loaded)
   useEffect(() => {
@@ -144,11 +155,8 @@ export default function LeaveListTable({
         const role = user.role || 'employee';
         console.log('🎭 Setting user role to:', role);
         setUserRole(role);
-        // Set default to current user's ID
-        const userId = user.id || user.user_id || user._id;
-        if (userId && !selectedUserId) {
-          setSelectedUserId(userId.toString());
-        }
+        // Don't set selectedUserId here - let the useEffect handle it based on role
+        // Admin/HOD should start with empty (All Users), Employees start with their own ID
       }
     } catch (err: any) {
       console.error('❌ Failed to fetch current user:', err);
@@ -268,11 +276,10 @@ export default function LeaveListTable({
       const currentUserId = currentUser ? (currentUser.id || currentUser.user_id)?.toString() : '';
       const isCurrentUser = selectedUserId && currentUserId && selectedUserId === currentUserId;
       
-      // If no user selected yet, default to current user's endpoint (regular endpoint)
-      if (!selectedUserId || selectedUserId === '') {
-        actualEndpoint = '/Leave/LeaveList';
-      } else if (selectedUserId === 'all' || selectedUserId === 'All Users') {
-        // "All Users" explicitly selected (only for admin/HOD)
+      // For Admin: Empty selectedUserId or "all" means "All Users" -> use Admin endpoint
+      // For HOD: Empty selectedUserId or "all" means "All Users" -> use HOD endpoint
+      // For Employee: Empty means their own leaves -> use regular endpoint
+      if (!selectedUserId || selectedUserId === '' || selectedUserId === 'all' || selectedUserId === 'All Users') {
         if (isAdmin) {
           actualEndpoint = '/Leave/LeaveAdminList';
         } else if (isHod) {
