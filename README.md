@@ -230,6 +230,10 @@ cd frontend && npm run dev
 5. Create your first user account
 6. Configure approval workflows
 
+## CI/CD
+
+This project uses GitHub Actions for automated deployment. CI/CD test
+
 ## License
 
 Private - Consultare Projects
