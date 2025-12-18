@@ -16,6 +16,7 @@ export default function CalendarPage() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedDateLeaves, setSelectedDateLeaves] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [userRole, setUserRole] = useState<string>('');
 
   // Get current month and year
   const currentMonth = currentDate.getMonth();
@@ -146,6 +147,21 @@ export default function CalendarPage() {
       setLoadingFilters(false);
     }
   };
+
+  // Fetch user role
+  useEffect(() => {
+    const fetchUserRole = async () => {
+      try {
+        const response = await api.get('/Auth/Me');
+        if (response.data?.user?.role) {
+          setUserRole(response.data.user.role.toLowerCase());
+        }
+      } catch (err) {
+        console.error('Failed to fetch user role:', err);
+      }
+    };
+    fetchUserRole();
+  }, []);
 
   // useEffect hooks - must be after function definitions but BEFORE any conditional returns
   useEffect(() => {
