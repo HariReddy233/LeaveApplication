@@ -688,6 +688,18 @@ export const UpdateEmployeeService = async (Request) => {
   }
 
   try {
+    // Check if email already exists for a different user (if email is being updated)
+    if (email) {
+      const emailCheckResult = await database.query(
+        'SELECT user_id FROM users WHERE LOWER(email) = $1 AND user_id != $2',
+        [email.toLowerCase(), userId]
+      );
+      
+      if (emailCheckResult.rows.length > 0) {
+        throw CreateError(`Email "${email}" is already in use by another user`, 400);
+      }
+    }
+
     // Update users table
     let userUpdateQuery = 'UPDATE users SET updated_at = NOW()';
     const userParams = [];
@@ -779,7 +791,15 @@ export const UpdateEmployeeService = async (Request) => {
         retryQuery += ` WHERE user_id = $${retryCount}`;
         retryParams.push(userId);
         
-        userResult = await database.query(retryQuery, retryParams);
+        try {
+          userResult = await database.query(retryQuery, retryParams);
+        } catch (retryError) {
+          // Handle duplicate email error in retry
+          if (retryError.code === '23505' && retryError.constraint === 'users_email_key') {
+            throw CreateError(`Email "${email}" is already in use by another user`, 400);
+          }
+          throw retryError;
+        }
       } else {
         throw nameError;
       }
