@@ -47,9 +47,26 @@ database.query('SELECT NOW() as current_time, current_database()', (err, res) =>
   }
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'Server is running' });
+// Enhanced health check with database status
+app.get('/api/health', async (req, res) => {
+  try {
+    // Test database connection
+    await database.query('SELECT 1');
+    res.json({ 
+      status: 'ok', 
+      message: 'Server is running',
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(503).json({ 
+      status: 'error', 
+      message: 'Server is running but database connection failed',
+      database: 'disconnected',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Routes - using /api/v1 prefix to match HR Portal pattern
@@ -61,9 +78,62 @@ app.use(NotFoundError);
 // Default Error Handler
 app.use(DefaultErrorHandler);
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`API endpoints available at http://localhost:${PORT}/api/v1`);
+const server = app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ API endpoints available at http://localhost:${PORT}/api/v1`);
+  console.log(`✅ Health check available at http://localhost:${PORT}/api/health`);
+  
+  // Signal PM2 that the server is ready
+  if (process.send) {
+    process.send('ready');
+  }
+});
+
+// Graceful shutdown handling
+const gracefulShutdown = async (signal) => {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  
+  server.close(async () => {
+    console.log('HTTP server closed.');
+    
+    // Close database pool
+    try {
+      await database.end();
+      console.log('Database pool closed.');
+    } catch (error) {
+      console.error('Error closing database pool:', error);
+    }
+    
+    console.log('Graceful shutdown complete.');
+    process.exit(0);
+  });
+  
+  // Force shutdown after 10 seconds
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Don't exit, let PM2 handle restart
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit, let PM2 handle restart
+});
+
+// Keep process alive
+process.on('exit', (code) => {
+  console.log(`Process exiting with code ${code}`);
 });
 
 export default app;

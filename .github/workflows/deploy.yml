@@ -34,11 +34,18 @@ jobs:
             # Install dependencies
             npm install --production
             
-            # Restart with PM2
-            pm2 restart hrportal-backend || pm2 start src/server.js --name hrportal-backend
+            # Create logs directory if it doesn't exist
+            mkdir -p logs
+            
+            # Restart with PM2 using ecosystem config (better process management)
+            pm2 restart ecosystem.config.js || pm2 start ecosystem.config.js
+            
+            # Save PM2 configuration to auto-start on server reboot
+            pm2 save
             
             # Check status
             pm2 list
+            pm2 logs hrportal-backend --lines 20 --nostream
             
             echo "✅ Backend Deployment Complete!"
 
@@ -73,11 +80,19 @@ jobs:
             # Build production bundle
             npm run build
             
-            # Restart with PM2
-            pm2 restart hrportal-frontend || pm2 start npm --name hrportal-frontend -- start
+            # Create logs directory if it doesn't exist
+            mkdir -p logs
+            
+            # Restart with PM2 using ecosystem config (better process management)
+            pm2 restart ecosystem.config.js || pm2 start ecosystem.config.js
+            
+            # Save PM2 configuration to auto-start on server reboot
+            pm2 save
             
             # Check status
             pm2 list
+            pm2 logs hrportal-frontend --lines 20 --nostream
             
             echo "✅ Frontend Deployment Complete!"
+
 
