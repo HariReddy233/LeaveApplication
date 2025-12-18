@@ -75,3 +75,4 @@ If you get "relation already exists", the table is already created. You can skip
 - Check database connection
 - Review backend logs for errors
 
+

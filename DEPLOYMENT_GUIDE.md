@@ -110,3 +110,4 @@ npm run lint
 - [ ] Email notifications configured
 - [ ] SSL certificate installed (for HTTPS)
 
+
