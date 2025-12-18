@@ -751,6 +751,11 @@ export const UpdateEmployeeService = async (Request) => {
     try {
       userResult = await database.query(userUpdateQuery, userParams);
     } catch (nameError) {
+      // Handle duplicate email error first
+      if (nameError.code === '23505' && nameError.constraint === 'users_email_key') {
+        throw CreateError(`Email "${email}" is already in use by another user`, 400);
+      }
+      
       // If first_name/last_name columns don't exist, try with full_name
       if (nameError.code === '42703' && full_name) {
         // Retry with full_name instead
