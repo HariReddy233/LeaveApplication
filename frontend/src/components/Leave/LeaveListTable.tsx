@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ReactPaginate from 'react-paginate';
-import { Edit, Trash2, FileText, FileSpreadsheet } from 'lucide-react';
+import { Edit, Trash2, FileText, FileSpreadsheet, CheckCircle, XCircle } from 'lucide-react';
 import api from '@/lib/api';
 import DateFormatter from '@/utils/DateFormatter';
 import ExportDataJSON from '@/utils/ExportFromJSON';
@@ -702,29 +702,60 @@ export default function LeaveListTable({
                         </td>
                         {showActions && (
                           <td className="px-4 py-3">
-                            {canEdit(record) && (
-                              <div className="flex items-center gap-2">
-                                <Link
-                                  href={`/dashboard/apply-leave?id=${record.id || record._id}`}
-                                  className="text-yellow-600 hover:text-yellow-800"
-                                  title="Edit"
-                                  aria-label="Edit leave application"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </Link>
-                                {checkCanDelete(record) && (
+                            <div className="flex items-center gap-2">
+                              {/* Admin Approve/Reject buttons - only show for Admin role and pending leaves */}
+                              {userRole?.toLowerCase() === 'admin' && 
+                               (record.AdminStatus || record.admin_status) === 'Pending' && (
+                                <>
                                   <button
-                                    onClick={() => DeleteLeave(record.id || record._id)}
-                                    className="text-red-600 hover:text-red-800"
-                                    title="Delete"
-                                    aria-label="Delete leave application"
+                                    onClick={() => handleAdminApprove(record.id || record._id)}
+                                    className="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50"
+                                    title="Approve Leave"
+                                    aria-label="Approve leave application"
                                   >
-                                    <Trash2 className="w-4 h-4" />
+                                    <CheckCircle className="w-5 h-5" />
                                   </button>
-                                )}
-                              </div>
-                            )}
-                            {!canEdit(record) && <span className="text-gray-400 text-xs">-</span>}
+                                  <button
+                                    onClick={() => handleAdminReject(record.id || record._id)}
+                                    className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                                    title="Reject Leave"
+                                    aria-label="Reject leave application"
+                                  >
+                                    <XCircle className="w-5 h-5" />
+                                  </button>
+                                </>
+                              )}
+                              
+                              {/* Edit and Delete buttons */}
+                              {canEdit(record) && (
+                                <>
+                                  <Link
+                                    href={`/dashboard/apply-leave?id=${record.id || record._id}`}
+                                    className="text-yellow-600 hover:text-yellow-800 p-1 rounded hover:bg-yellow-50"
+                                    title="Edit"
+                                    aria-label="Edit leave application"
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                  </Link>
+                                  {checkCanDelete(record) && (
+                                    <button
+                                      onClick={() => DeleteLeave(record.id || record._id)}
+                                      className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                                      title="Delete"
+                                      aria-label="Delete leave application"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                              
+                              {/* Show dash if no actions available */}
+                              {!canEdit(record) && userRole?.toLowerCase() !== 'admin' && 
+                               (record.AdminStatus || record.admin_status) !== 'Pending' && (
+                                <span className="text-gray-400 text-xs">-</span>
+                              )}
+                            </div>
                           </td>
                         )}
                       </tr>
