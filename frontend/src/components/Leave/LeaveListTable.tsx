@@ -678,7 +678,10 @@ export default function LeaveListTable({
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Leave Type</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Application Date</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Total Day</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Hod Status</th>
+                  {/* Hide HOD Status column for Admin only */}
+                  {userRole?.toLowerCase() !== 'admin' && (
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Hod Status</th>
+                  )}
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Admin Status</th>
                   {showActions && (
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Action</th>
@@ -807,7 +810,7 @@ export default function LeaveListTable({
                   })
                 ) : (
                   <tr>
-                    <td colSpan={showActions ? 7 : 6} className="px-4 py-8 text-center text-gray-500">
+                    <td colSpan={showActions ? (userRole?.toLowerCase() === 'admin' ? 6 : 7) : (userRole?.toLowerCase() === 'admin' ? 5 : 6)} className="px-4 py-8 text-center text-gray-500">
                       No leave applications found
                     </td>
                   </tr>
