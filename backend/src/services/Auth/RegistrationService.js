@@ -111,10 +111,20 @@ const RegistrationService = async (Request) => {
         if (oldSchemaError.code === '23505' && oldSchemaError.constraint === 'users_email_key') {
           throw CreateError(`Email "${email}" is already in use by another user`, 400);
         }
+        // Handle column not found errors more gracefully
+        if (oldSchemaError.code === '42703' || oldSchemaError.message.includes('column') || oldSchemaError.message.includes('does not exist')) {
+          console.error('Database schema error:', oldSchemaError.message);
+          throw CreateError(`Database schema error: ${oldSchemaError.message}. Please contact administrator.`, 500);
+        }
         console.error('Database insert error:', oldSchemaError);
         throw CreateError(`Failed to create user: ${oldSchemaError.message}`, 500);
       }
     } else {
+      // Handle column not found errors more gracefully
+      if (insertError.code === '42703' || insertError.message.includes('column') || insertError.message.includes('does not exist')) {
+        console.error('Database schema error:', insertError.message);
+        throw CreateError(`Database schema error: ${insertError.message}. Please contact administrator.`, 500);
+      }
       console.error('Database insert error:', insertError);
       throw CreateError(`Failed to create user: ${insertError.message}`, 500);
     }

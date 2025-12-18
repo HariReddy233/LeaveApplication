@@ -300,7 +300,7 @@ export default function CalendarPage() {
                 key={index}
                 className={`relative min-h-[80px] bg-white p-1.5 ${
                   !day.isCurrentMonth ? 'bg-gray-50' : ''
-                } ${isToday ? 'bg-blue-50' : ''}`}
+                } ${isToday ? 'bg-blue-100 border-2 border-blue-300' : ''}`}
               >
                 <div className={`text-xs font-medium mb-1 ${
                   !day.isCurrentMonth ? 'text-gray-400' : isToday ? 'text-blue-700 font-bold' : 'text-gray-700'

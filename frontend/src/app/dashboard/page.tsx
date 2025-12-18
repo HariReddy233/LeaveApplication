@@ -147,7 +147,10 @@ export default function DashboardPage() {
       {/* Statistics Cards - Compact Design */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {/* Total Leave */}
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-200 p-4 shadow-sm hover:shadow transition-all">
+        <Link
+          href={isAdmin ? "/dashboard/leaves-admin" : isHod ? "/dashboard/leaves-hod" : "/dashboard/leaves"}
+          className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg border border-blue-200 p-4 shadow-sm hover:shadow transition-all cursor-pointer"
+        >
           <div className="flex items-center justify-between mb-2">
             <div className="bg-white/60 p-2 rounded-md">
               <FileCheck className="w-4 h-4 text-blue-600" />
@@ -162,10 +165,13 @@ export default function DashboardPage() {
               {totalLeave}
             </h3>
           </div>
-        </div>
+        </Link>
 
         {/* Pending Leave */}
-        <div className="bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-lg border border-yellow-200 p-4 shadow-sm hover:shadow transition-all">
+        <Link
+          href={`${isAdmin ? "/dashboard/leaves-admin" : isHod ? "/dashboard/leaves-hod" : "/dashboard/leaves"}?status=Pending`}
+          className="bg-gradient-to-br from-yellow-50 to-yellow-100 rounded-lg border border-yellow-200 p-4 shadow-sm hover:shadow transition-all cursor-pointer"
+        >
           <div className="flex items-center justify-between mb-2">
             <div className="bg-white/60 p-2 rounded-md">
               <Clock className="w-4 h-4 text-yellow-600" />
@@ -180,10 +186,13 @@ export default function DashboardPage() {
               {pendingCount}
             </h3>
           </div>
-        </div>
+        </Link>
 
         {/* Approved Leave */}
-        <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg border border-green-200 p-4 shadow-sm hover:shadow transition-all">
+        <Link
+          href={`${isAdmin ? "/dashboard/leaves-admin" : isHod ? "/dashboard/leaves-hod" : "/dashboard/leaves"}?status=Approved`}
+          className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg border border-green-200 p-4 shadow-sm hover:shadow transition-all cursor-pointer"
+        >
           <div className="flex items-center justify-between mb-2">
             <div className="bg-white/60 p-2 rounded-md">
               <CheckCircle className="w-4 h-4 text-green-600" />
@@ -198,10 +207,13 @@ export default function DashboardPage() {
               {approvedCount}
             </h3>
           </div>
-        </div>
+        </Link>
 
         {/* Rejected Leave */}
-        <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg border border-red-200 p-4 shadow-sm hover:shadow transition-all">
+        <Link
+          href={`${isAdmin ? "/dashboard/leaves-admin" : isHod ? "/dashboard/leaves-hod" : "/dashboard/leaves"}?status=Rejected`}
+          className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg border border-red-200 p-4 shadow-sm hover:shadow transition-all cursor-pointer"
+        >
           <div className="flex items-center justify-between mb-2">
             <div className="bg-white/60 p-2 rounded-md">
               <XCircle className="w-4 h-4 text-red-600" />
@@ -216,7 +228,7 @@ export default function DashboardPage() {
               {rejectedCount}
             </h3>
           </div>
-        </div>
+        </Link>
       </div>
 
       {/* Pending Approvals Section - Only for Admin and HOD - Simple Count Only */}
@@ -396,7 +408,10 @@ export default function DashboardPage() {
                     <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-700 uppercase">Leave Type</th>
                     <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-700 uppercase">Application Date</th>
                     <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-700 uppercase">Days</th>
-                    <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-700 uppercase">HOD Status</th>
+                    {/* Hide HOD Status for Admin */}
+                    {!isAdmin && (
+                      <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-700 uppercase">HOD Status</th>
+                    )}
                     <th className="text-left py-2.5 px-3 text-xs font-semibold text-gray-700 uppercase">Admin Status</th>
                   </tr>
                 </thead>
@@ -408,17 +423,20 @@ export default function DashboardPage() {
                         <DateFormatter date={leave.createdAt || leave.created_at} />
                       </td>
                       <td className="py-2.5 px-3 text-xs font-semibold text-gray-900">{leave.NumOfDay || leave.number_of_days || 'N/A'}</td>
-                      <td className="py-2.5 px-3">
-                        <span
-                          className={classNames('px-2 py-1 rounded text-xs font-medium', {
-                            'bg-green-100 text-green-700': (leave.HodStatus || leave.hod_status) === 'Approved',
-                            'bg-yellow-100 text-yellow-700': (leave.HodStatus || leave.hod_status) === 'Pending',
-                            'bg-red-100 text-red-700': (leave.HodStatus || leave.hod_status) === 'Rejected',
-                          })}
-                        >
-                          {leave.HodStatus || leave.hod_status || 'Pending'}
-                        </span>
-                      </td>
+                      {/* Hide HOD Status for Admin */}
+                      {!isAdmin && (
+                        <td className="py-2.5 px-3">
+                          <span
+                            className={classNames('px-2 py-1 rounded text-xs font-medium', {
+                              'bg-green-100 text-green-700': (leave.HodStatus || leave.hod_status) === 'Approved',
+                              'bg-yellow-100 text-yellow-700': (leave.HodStatus || leave.hod_status) === 'Pending',
+                              'bg-red-100 text-red-700': (leave.HodStatus || leave.hod_status) === 'Rejected',
+                            })}
+                          >
+                            {leave.HodStatus || leave.hod_status || 'Pending'}
+                          </span>
+                        </td>
+                      )}
                       <td className="py-2.5 px-3">
                         <span
                           className={classNames('px-2 py-1 rounded text-xs font-medium', {
