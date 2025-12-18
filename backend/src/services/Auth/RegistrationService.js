@@ -253,11 +253,19 @@ const RegistrationService = async (Request) => {
   }
 
   // Create token
-  const payLoad = {
-    id: userId,
-  };
-
-  const token = await CreateToken(payLoad);
+  let token;
+  try {
+    const payLoad = {
+      id: userId,
+    };
+    token = await CreateToken(payLoad);
+    if (!token) {
+      throw new Error('Token creation returned null or undefined');
+    }
+  } catch (tokenError) {
+    console.error('❌ Failed to create token:', tokenError);
+    throw CreateError(`Failed to create authentication token: ${tokenError.message}`, 500);
+  }
 
   return {
     AccessToken: token,
