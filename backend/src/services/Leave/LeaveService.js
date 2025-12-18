@@ -558,6 +558,7 @@ export const GetAllLeavesService = async (Request) => {
   const pageNumber = parseInt(Request.params?.pageNumber) || 1;
   const perPage = parseInt(Request.params?.perPage) || 5;
   const searchKeyword = Request.params?.searchKeyword || '0';
+  const userId = Request.query?.userId || Request.body?.userId || Request.params?.userId || null;
   const skipRow = (pageNumber - 1) * perPage;
 
   let query = `
@@ -567,16 +568,40 @@ export const GetAllLeavesService = async (Request) => {
       COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
       u.email,
       u.first_name,
-      u.last_name
+      u.last_name,
+      u.user_id,
+      COALESCE(
+        NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
+        hod_approver.first_name,
+        hod_approver.last_name,
+        hod_approver.email
+      ) as hod_approver_name,
+      COALESCE(
+        NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+        admin_approver.first_name,
+        admin_approver.last_name,
+        admin_approver.email
+      ) as admin_approver_name
     FROM leave_applications la
     JOIN employees e ON la.employee_id = e.employee_id
     JOIN users u ON e.user_id = u.user_id
     LEFT JOIN leave_types lt ON la.leave_type = lt.name
+    LEFT JOIN employees hod_emp ON la.approved_by_hod = hod_emp.employee_id
+    LEFT JOIN users hod_approver ON hod_emp.user_id = hod_approver.user_id
+    LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
+    LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
     WHERE 1=1
   `;
   
   const params = [];
   let paramCount = 1;
+
+  // Add user filter (ONLY for Admin - filter by specific user_id)
+  if (userId && userId !== 'all' && userId !== 'All Users' && userId !== '') {
+    query += ` AND u.user_id = $${paramCount}`;
+    params.push(parseInt(userId));
+    paramCount++;
+  }
 
   // Add search filter
   if (searchKeyword && searchKeyword !== '0') {
@@ -615,6 +640,8 @@ export const GetAllLeavesService = async (Request) => {
       }],
       HodStatus: row.hod_status || 'Pending',
       AdminStatus: row.admin_status || 'Pending',
+      HodApproverName: row.hod_approver_name || null,
+      AdminApproverName: row.admin_approver_name || null,
       NumOfDay: row.number_of_days,
       LeaveDetails: row.reason,
       createdAt: row.created_at
@@ -1139,9 +1166,11 @@ export const ApproveLeaveHodService = async (Request) => {
         console.error('Email sending failed:', emailError);
       });
 
-    // If approved, send organization-wide notification to all users
+    // If approved, send organization-wide informational notification to all users (NOT approval emails)
     if (finalStatus === 'Approved') {
       try {
+        const { sendLeaveInfoNotificationEmail } = await import('../../utils/emailService.js');
+        
         // Get all active users for organization-wide notification
         const allUsersResult = await database.query(
           `SELECT email, 
@@ -1158,20 +1187,20 @@ export const ApproveLeaveHodService = async (Request) => {
           [leave.employee_email]
         );
 
-        // Send notification email to all users (non-blocking)
+        // Send informational notification email to all users (non-blocking)
         for (const user of allUsersResult.rows) {
           if (user.email) {
-            sendLeaveApprovalEmail({
-              employee_email: user.email,
-              employee_name: user.full_name,
+            sendLeaveInfoNotificationEmail({
+              to: user.email,
+              recipient_name: user.full_name,
+              employee_name: leave.employee_name,
               leave_type: leave.leave_type,
               start_date: leave.start_date,
               end_date: leave.end_date,
               number_of_days: leave.number_of_days,
-              status: 'Approved',
-              remark: `Leave approved for ${leave.employee_name}. This is an organization-wide notification.`
-            }, approverName).catch((emailErr) => {
-              console.error(`Failed to send org-wide notification to ${user.email}:`, emailErr.message);
+              approver_name: approverName
+            }).catch((emailErr) => {
+              console.error(`Failed to send org-wide info notification to ${user.email}:`, emailErr.message);
             });
           }
         }
@@ -1418,9 +1447,11 @@ export const ApproveLeaveAdminService = async (Request) => {
         console.error('Email sending failed:', emailError);
       });
 
-    // If approved, send organization-wide notification to all users
+    // If approved, send organization-wide informational notification to all users (NOT approval emails)
     if (finalStatus === 'Approved') {
       try {
+        const { sendLeaveInfoNotificationEmail } = await import('../../utils/emailService.js');
+        
         // Get all active users for organization-wide notification
         const allUsersResult = await database.query(
           `SELECT email, 
@@ -1437,20 +1468,20 @@ export const ApproveLeaveAdminService = async (Request) => {
           [leave.employee_email]
         );
 
-        // Send notification email to all users (non-blocking)
+        // Send informational notification email to all users (non-blocking)
         for (const user of allUsersResult.rows) {
           if (user.email) {
-            sendLeaveApprovalEmail({
-              employee_email: user.email,
-              employee_name: user.full_name,
+            sendLeaveInfoNotificationEmail({
+              to: user.email,
+              recipient_name: user.full_name,
+              employee_name: leave.employee_name,
               leave_type: leave.leave_type,
               start_date: leave.start_date,
               end_date: leave.end_date,
               number_of_days: leave.number_of_days,
-              status: 'Approved',
-              remark: `Leave approved for ${leave.employee_name}. This is an organization-wide notification.`
-            }, approverName).catch((emailErr) => {
-              console.error(`Failed to send org-wide notification to ${user.email}:`, emailErr.message);
+              approver_name: approverName
+            }).catch((emailErr) => {
+              console.error(`Failed to send org-wide info notification to ${user.email}:`, emailErr.message);
             });
           }
         }
@@ -1580,11 +1611,27 @@ export const FilterLeaveByStatusAdminService = async (Request) => {
       COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
       u.email,
       u.first_name,
-      u.last_name
+      u.last_name,
+      COALESCE(
+        NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
+        hod_approver.first_name,
+        hod_approver.last_name,
+        hod_approver.email
+      ) as hod_approver_name,
+      COALESCE(
+        NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+        admin_approver.first_name,
+        admin_approver.last_name,
+        admin_approver.email
+      ) as admin_approver_name
     FROM leave_applications la
     JOIN employees e ON la.employee_id = e.employee_id
     JOIN users u ON e.user_id = u.user_id
     LEFT JOIN leave_types lt ON la.leave_type = lt.name
+    LEFT JOIN employees hod_emp ON la.approved_by_hod = hod_emp.employee_id
+    LEFT JOIN users hod_approver ON hod_emp.user_id = hod_approver.user_id
+    LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
+    LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
     WHERE la.admin_status = $1
   `;
   
@@ -1628,6 +1675,8 @@ export const FilterLeaveByStatusAdminService = async (Request) => {
       }],
       HodStatus: row.hod_status || 'Pending',
       AdminStatus: row.admin_status || 'Pending',
+      HodApproverName: row.hod_approver_name || null,
+      AdminApproverName: row.admin_approver_name || null,
       NumOfDay: row.number_of_days,
       LeaveDetails: row.reason,
       createdAt: row.created_at

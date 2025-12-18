@@ -621,6 +621,217 @@ This is an automated email. Please do not reply.
 };
 
 /**
+ * Send Informational Leave Notification to Other Users (Not the Applicant)
+ * This is for awareness only - not an action email
+ */
+export const sendLeaveInfoNotificationEmail = async ({
+  to,
+  recipient_name,
+  employee_name,
+  leave_type,
+  start_date,
+  end_date,
+  number_of_days,
+  approver_name
+}) => {
+  try {
+    // Check if email is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('⚠️ Email not configured. SMTP_USER or SMTP_PASS missing in .env file');
+      return;
+    }
+
+    if (!to) {
+      console.warn('⚠️ Cannot send email: recipient email is missing');
+      return;
+    }
+
+    const mailTransporter = getTransporter();
+
+    // Format dates
+    const startDate = new Date(start_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+    const endDate = new Date(end_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME || 'Consultare Leave Management'}" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
+      to: to,
+      subject: `Leave Notification: ${employee_name} will be on leave`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+              line-height: 1.6; 
+              color: #1f2937; 
+              background-color: #f3f4f6; 
+              padding: 20px;
+            }
+            .email-wrapper { 
+              max-width: 600px; 
+              margin: 0 auto; 
+              background: #ffffff;
+              border-radius: 12px;
+              overflow: hidden;
+              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            .content { 
+              padding: 20px 24px; 
+              background: #ffffff;
+            }
+            .greeting {
+              font-size: 14px;
+              color: #374151;
+              margin-bottom: 12px;
+            }
+            .info-badge {
+              display: inline-block;
+              padding: 8px 16px;
+              border-radius: 6px;
+              color: white;
+              font-weight: 600;
+              font-size: 14px;
+              background: #3b82f6;
+              margin: 8px 0;
+              letter-spacing: 0.3px;
+            }
+            .info-card { 
+              background: #f0f9ff; 
+              padding: 12px 16px; 
+              border-radius: 6px; 
+              margin: 12px 0; 
+              border-left: 3px solid #3b82f6;
+            }
+            .info-row {
+              display: flex;
+              padding: 8px 0;
+              border-bottom: 1px solid #e5e7eb;
+            }
+            .info-row:last-child {
+              border-bottom: none;
+            }
+            .info-label {
+              font-weight: 600;
+              color: #374151;
+              min-width: 120px;
+              font-size: 12px;
+            }
+            .info-value {
+              color: #6b7280;
+              font-size: 12px;
+              flex: 1;
+            }
+            .footer { 
+              text-align: center; 
+              padding: 16px; 
+              background: #f9fafb;
+              border-top: 1px solid #e5e7eb;
+            }
+            .footer-text {
+              color: #9ca3af; 
+              font-size: 11px; 
+            }
+          </style>
+        </head>
+        <body>
+          <div class="email-wrapper">
+            <div class="content">
+              <div class="greeting">Dear ${recipient_name || 'Team Member'},</div>
+              
+              <div style="text-align: center; margin: 16px 0;">
+                <div class="info-badge">📢 Leave Notification</div>
+              </div>
+              
+              <p style="color: #374151; font-size: 14px; margin: 16px 0;">
+                This is to inform you that <strong>${employee_name}</strong>'s leave has been approved and they will not be available during this period.
+              </p>
+              
+              <div class="info-card">
+                <div style="font-weight: 600; color: #1e40af; margin-bottom: 10px; font-size: 13px;">
+                  📅 Leave Details
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Employee:</span>
+                  <span class="info-value">${employee_name}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Leave Type:</span>
+                  <span class="info-value">${leave_type || 'N/A'}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Start Date:</span>
+                  <span class="info-value">${startDate}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">End Date:</span>
+                  <span class="info-value">${endDate}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Duration:</span>
+                  <span class="info-value">${number_of_days || 'N/A'} day${number_of_days !== 1 ? 's' : ''}</span>
+                </div>
+                ${approver_name ? `
+                <div class="info-row">
+                  <span class="info-label">Approved by:</span>
+                  <span class="info-value">${approver_name}</span>
+                </div>
+                ` : ''}
+              </div>
+              
+              <p style="color: #6b7280; font-size: 13px; margin-top: 20px; font-style: italic;">
+                This is an informational notification for your awareness. No action is required.
+              </p>
+            </div>
+            <div class="footer">
+              <p class="footer-text">
+                This is an automated notification from the Consultare Leave Management System.<br>
+                Please do not reply to this email.
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `Leave Notification
+
+Dear ${recipient_name || 'Team Member'},
+
+This is to inform you that ${employee_name}'s leave has been approved and they will not be available during this period.
+
+Employee: ${employee_name}
+Leave Type: ${leave_type || 'N/A'}
+Start Date: ${startDate}
+End Date: ${endDate}
+Number of Days: ${number_of_days || 'N/A'}
+${approver_name ? `Approved by: ${approver_name}` : ''}
+
+This is an informational notification for your awareness. No action is required.
+
+© ${new Date().getFullYear()} Consultare Leave Management System`
+    };
+
+    const info = await mailTransporter.sendMail(mailOptions);
+    console.log(`✅ Leave info notification sent to ${to} - Message ID: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`❌ Failed to send leave info notification email:`, error.message);
+    throw error;
+  }
+};
+
+/**
  * Send Password Reset OTP Email
  */
 export const sendPasswordResetOTPEmail = async ({

@@ -297,15 +297,21 @@ export default function LeaveListTable({
       }
       
       let response;
+      // For Admin, pass userId as query parameter if a specific user is selected
+      const isAdminEndpoint = actualEndpoint.includes('Admin') || actualEndpoint.includes('admin');
+      const userIdParam = (isAdminEndpoint && selectedUserId && selectedUserId !== 'all' && selectedUserId !== 'All Users' && selectedUserId !== '') 
+        ? `?userId=${selectedUserId}` 
+        : '';
+      
       if (method === 'POST') {
         // POST request for status filtering
-        const url = `${actualEndpoint}/${pageNumber}/${perPage}/0`;
+        const url = `${actualEndpoint}/${pageNumber}/${perPage}/0${userIdParam}`;
         response = await api.post(url, { status });
       } else {
         // GET request - fetch all leaves (no search, no pagination limit for filtering)
         const url = actualEndpoint.includes('?') 
-          ? `${actualEndpoint}&pageNumber=1&perPage=1000&searchKeyword=0`
-          : `${actualEndpoint}/1/1000/0`;
+          ? `${actualEndpoint}&pageNumber=1&perPage=1000&searchKeyword=0${userIdParam ? '&' + userIdParam.substring(1) : ''}`
+          : `${actualEndpoint}/1/1000/0${userIdParam}`;
         response = await api.get(url);
       }
       
@@ -315,8 +321,9 @@ export default function LeaveListTable({
         
         console.log(`📊 Fetched ${data.length} leaves from API (total: ${total})`);
         
-        // Filter by selected user if a user is selected
-        if (selectedUserId && selectedUserId !== 'all' && selectedUserId !== 'All Users') {
+        // For Admin endpoint, backend already filters by userId, so no client-side filtering needed
+        // Only apply client-side filtering if NOT using Admin endpoint (for backward compatibility)
+        if (!isAdminEndpoint && selectedUserId && selectedUserId !== 'all' && selectedUserId !== 'All Users') {
           // Find the selected user to get their email and user_id
           const selectedUser = users.find(u => {
             const uId = (u.user_id || u.id)?.toString();
@@ -329,7 +336,7 @@ export default function LeaveListTable({
             const selectedEmployeeId = selectedUser.employee_id || selectedUser.employeeId || selectedUser.EmployeeId;
             const beforeFilter = data.length;
             
-            console.log('🔍 Filtering by user:', {
+            console.log('🔍 Filtering by user (client-side):', {
               selectedUserId: selectedUserIdValue,
               selectedEmail,
               selectedEmployeeId,
@@ -337,7 +344,16 @@ export default function LeaveListTable({
             });
             
             data = data.filter((record: any) => {
-              // Method 1: Match by employee_id if available (most reliable)
+              // Method 1: Match by user_id from the record (most reliable)
+              const recordUserId = record.user_id || record.userId || record.UserId;
+              if (recordUserId && selectedUserIdValue) {
+                const matches = recordUserId.toString() === selectedUserIdValue.toString();
+                if (matches) {
+                  return true;
+                }
+              }
+              
+              // Method 2: Match by employee_id if available
               const recordEmployeeId = record.employee_id || record.employeeId || record.EmployeeId;
               if (selectedEmployeeId && recordEmployeeId) {
                 const matches = recordEmployeeId.toString() === selectedEmployeeId.toString();
@@ -346,20 +362,11 @@ export default function LeaveListTable({
                 }
               }
               
-              // Method 2: Match by email from Employee array (most reliable for current data structure)
+              // Method 3: Match by email from Employee array
               const employee = record.Employee?.[0] || record.employee || {};
               const recordEmail = (employee.Email || employee.email || record.email || record.Email)?.toLowerCase()?.trim();
               if (recordEmail && selectedEmail) {
                 const matches = recordEmail === selectedEmail;
-                if (matches) {
-                  return true;
-                }
-              }
-              
-              // Method 3: Match by user_id from the record (if available)
-              const recordUserId = record.user_id || record.userId || record.UserId;
-              if (recordUserId && selectedUserIdValue) {
-                const matches = recordUserId.toString() === selectedUserIdValue.toString();
                 if (matches) {
                   return true;
                 }
@@ -656,26 +663,36 @@ export default function LeaveListTable({
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-900">{record.NumOfDay || record.number_of_days || 'N/A'}</td>
                         <td className="px-4 py-3">
-                          <span
-                            className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
-                              'bg-green-100 text-green-800': (record.HodStatus || record.hod_status) === 'Approved',
-                              'bg-yellow-100 text-yellow-800': (record.HodStatus || record.hod_status) === 'Pending',
-                              'bg-red-100 text-red-800': (record.HodStatus || record.hod_status) === 'Rejected',
-                            })}
-                          >
-                            {record.HodStatus || record.hod_status || 'Pending'}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span
+                              className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
+                                'bg-green-100 text-green-800': (record.HodStatus || record.hod_status) === 'Approved',
+                                'bg-yellow-100 text-yellow-800': (record.HodStatus || record.hod_status) === 'Pending',
+                                'bg-red-100 text-red-800': (record.HodStatus || record.hod_status) === 'Rejected',
+                              })}
+                            >
+                              {record.HodStatus || record.hod_status || 'Pending'}
+                            </span>
+                            {(record.HodApproverName || record.hod_approver_name) && (record.HodStatus || record.hod_status) === 'Approved' && (
+                              <span className="text-xs text-gray-500">by {record.HodApproverName || record.hod_approver_name}</span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3">
-                          <span
-                            className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
-                              'bg-green-100 text-green-800': (record.AdminStatus || record.admin_status) === 'Approved',
-                              'bg-yellow-100 text-yellow-800': (record.AdminStatus || record.admin_status) === 'Pending',
-                              'bg-red-100 text-red-800': (record.AdminStatus || record.admin_status) === 'Rejected',
-                            })}
-                          >
-                            {record.AdminStatus || record.admin_status || 'Pending'}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span
+                              className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
+                                'bg-green-100 text-green-800': (record.AdminStatus || record.admin_status) === 'Approved',
+                                'bg-yellow-100 text-yellow-800': (record.AdminStatus || record.admin_status) === 'Pending',
+                                'bg-red-100 text-red-800': (record.AdminStatus || record.admin_status) === 'Rejected',
+                              })}
+                            >
+                              {record.AdminStatus || record.admin_status || 'Pending'}
+                            </span>
+                            {(record.AdminApproverName || record.admin_approver_name) && (record.AdminStatus || record.admin_status) === 'Approved' && (
+                              <span className="text-xs text-gray-500">by {record.AdminApproverName || record.admin_approver_name}</span>
+                            )}
+                          </div>
                         </td>
                         {showActions && (
                           <td className="px-4 py-3">
