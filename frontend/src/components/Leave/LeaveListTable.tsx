@@ -505,6 +505,50 @@ export default function LeaveListTable({
     }
   };
 
+  // Admin approval/rejection handlers
+  const handleAdminApprove = async (id: number) => {
+    if (!confirm('Are you sure you want to approve this leave? This will notify the entire organization.')) {
+      return;
+    }
+    
+    try {
+      await api.patch(`/Leave/LeaveApprove/${id}`, {
+        status: 'Approved',
+        comment: 'Approved by Admin'
+      });
+      
+      // Refresh the list
+      await fetchLeaves();
+      alert('Leave approved successfully! Organization has been notified.');
+    } catch (err: any) {
+      console.error('Failed to approve leave:', err);
+      alert(err.response?.data?.error || err.response?.data?.message || 'Failed to approve leave application');
+    }
+  };
+
+  const handleAdminReject = async (id: number) => {
+    const comment = prompt('Please provide a reason for rejection:');
+    if (comment === null) return; // User cancelled
+    
+    if (!confirm('Are you sure you want to reject this leave?')) {
+      return;
+    }
+    
+    try {
+      await api.patch(`/Leave/LeaveApprove/${id}`, {
+        status: 'Rejected',
+        comment: comment || 'Rejected by Admin'
+      });
+      
+      // Refresh the list
+      await fetchLeaves();
+      alert('Leave rejected successfully!');
+    } catch (err: any) {
+      console.error('Failed to reject leave:', err);
+      alert(err.response?.data?.error || err.response?.data?.message || 'Failed to reject leave application');
+    }
+  };
+
   const DeleteLeave = async (id: number) => {
     if (!confirm('Are you sure you want to delete this leave application?')) {
       return;
