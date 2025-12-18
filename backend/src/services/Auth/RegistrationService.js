@@ -87,31 +87,31 @@ const RegistrationService = async (Request) => {
       throw CreateError(`Email "${email}" is already in use by another user`, 400);
     }
     
-    // If new schema fails, try old schema (id, full_name)
+    // If new schema fails, try old schema (id, full_name) or alternative (user_id, full_name)
     if (insertError.code === '42703' || insertError.message.includes('column')) {
       try {
-        // Try with user_id instead of id (in case table uses user_id as primary key)
-        userResult = await database.query(
-          `INSERT INTO users (email, password_hash, full_name, role, status)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING user_id, email, full_name, role`,
-          [
-            email.toLowerCase(),
-            passwordHash,
-            fullName,
-            normalizedRole,
-            'Active'
-          ]
-        );
-        
-        if (userResult.rows.length > 0) {
-          userId = userResult.rows[0].user_id || userResult.rows[0].id;
-        }
-        
-        // If still no userId, try with id column
-        if (!userId && userResult.rows.length > 0) {
-          try {
-            const idResult = await database.query(
+        // First try: Use user_id (most common case)
+        try {
+          userResult = await database.query(
+            `INSERT INTO users (email, password_hash, full_name, role, status)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING user_id, email, full_name, role`,
+            [
+              email.toLowerCase(),
+              passwordHash,
+              fullName,
+              normalizedRole,
+              'Active'
+            ]
+          );
+          
+          if (userResult.rows.length > 0) {
+            userId = userResult.rows[0].user_id;
+          }
+        } catch (userIdError) {
+          // If user_id doesn't work, try id column (old schema)
+          if (userIdError.code === '42703' || userIdError.message.includes('column') || userIdError.message.includes('does not exist')) {
+            userResult = await database.query(
               `INSERT INTO users (email, password_hash, full_name, role, status)
                VALUES ($1, $2, $3, $4, $5)
                RETURNING id, email, full_name, role`,
@@ -123,17 +123,12 @@ const RegistrationService = async (Request) => {
                 'Active'
               ]
             );
-            if (idResult.rows.length > 0) {
-              userId = idResult.rows[0].id;
-              userResult = idResult;
+            
+            if (userResult.rows.length > 0) {
+              userId = userResult.rows[0].id;
             }
-          } catch (idError) {
-            // If id column also doesn't exist, use user_id from first query
-            if (idError.code === '42703' || idError.message.includes('column') || idError.message.includes('does not exist')) {
-              userId = userResult.rows[0].user_id;
-            } else {
-              throw idError;
-            }
+          } else {
+            throw userIdError;
           }
         }
       } catch (oldSchemaError) {
