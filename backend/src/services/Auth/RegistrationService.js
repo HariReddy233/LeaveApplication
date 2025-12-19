@@ -268,3 +268,4 @@ const RegistrationService = async (Request) => {
 };
 
 export default RegistrationService;
+export { RegistrationService };
