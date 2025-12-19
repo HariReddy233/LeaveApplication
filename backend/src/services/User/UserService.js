@@ -528,18 +528,9 @@ export const UpdateUserRoleService = async (Request) => {
   const user = userResult.rows[0];
   const actualUserId = user.user_id;
 
-  // Update employee role if employee record exists
-  try {
-    await database.query(
-      `UPDATE employees 
-       SET role = $1, updated_at = NOW()
-       WHERE user_id = $2`,
-      [normalizedRole, actualUserId]
-    );
-  } catch (empError) {
-    // Employee record update is optional
-    console.warn('Employee role update failed:', empError.message);
-  }
+  // Note: Role is stored in users table, not employees table
+  // Employee record update is not needed for role changes
+  // The role has already been updated in the users table above
 
   return {
     message: "User role updated successfully",
@@ -823,16 +814,9 @@ export const UpdateEmployeeService = async (Request) => {
     // Track if we have any fields to update (besides manager_id)
     let hasOtherFields = false;
 
-    // Note: email and full_name are in users table, not employees table
+    // Note: email, full_name, and role are in users table, not employees table
     // They are already handled in the users table update above
-    // Do NOT update email or full_name in employees table
-
-    if (normalizedRole) {
-      empUpdateQuery += `, role = $${paramCount}`;
-      empParams.push(normalizedRole);
-      paramCount++;
-      hasOtherFields = true;
-    }
+    // Do NOT update email, full_name, or role in employees table
 
     if (location !== undefined) {
       empUpdateQuery += `, location = $${paramCount}`;
@@ -958,43 +942,30 @@ export const UpdateEmployeeService = async (Request) => {
                   // Try INSERT first
                   console.log(`🔍 STEP 1.4: Creating employee record for HOD...`);
                   console.log(`📝 HOD details: user_id=${hodUser.user_id}, email=${hodUser.email}, full_name=${hodUser.full_name || hodUser.email}`);
-                  // Try INSERT with minimal fields (email and full_name columns might not exist)
+                  // Try INSERT with minimal fields (role column doesn't exist in employees table)
                   let createEmpResult;
                   try {
+                    // Note: role is stored in users table, not employees table
                     createEmpResult = await database.query(
-                      `INSERT INTO employees (user_id, role)
-                       VALUES ($1, $2)
+                      `INSERT INTO employees (user_id)
+                       VALUES ($1)
                        RETURNING employee_id`,
-                      [hodUser.user_id, hodUser.role || 'HOD']
+                      [hodUser.user_id]
                     );
-                  } catch (columnError) {
-                    if (columnError.code === '42703' || columnError.message.includes('column')) {
-                      // Some columns don't exist, try with just user_id
-                      try {
-                        createEmpResult = await database.query(
-                          `INSERT INTO employees (user_id)
-                           VALUES ($1)
-                           RETURNING employee_id`,
-                          [hodUser.user_id]
-                        );
-                      } catch (minError) {
-                        // If even that fails, try to get existing record
-                        if (minError.code === '23505' || minError.message.includes('duplicate')) {
-                          const existingResult = await database.query(
-                            'SELECT employee_id FROM employees WHERE user_id = $1',
-                            [hodUser.user_id]
-                          );
-                          if (existingResult.rows.length > 0) {
-                            createEmpResult = { rows: existingResult.rows };
-                          } else {
-                            throw columnError;
-                          }
-                        } else {
-                          throw columnError;
-                        }
+                  } catch (insertError) {
+                    // If insert fails (duplicate), try to get existing record
+                    if (insertError.code === '23505' || insertError.message.includes('duplicate')) {
+                      const existingResult = await database.query(
+                        'SELECT employee_id FROM employees WHERE user_id = $1',
+                        [hodUser.user_id]
+                      );
+                      if (existingResult.rows.length > 0) {
+                        createEmpResult = { rows: existingResult.rows };
+                      } else {
+                        throw insertError;
                       }
                     } else {
-                      throw columnError;
+                      throw insertError;
                     }
                   }
                   
