@@ -31,13 +31,8 @@ const RegistrationService = async (Request) => {
       [email.toLowerCase()]
     );
     
-    // If no result, try old schema (id, full_name)
-    if (existingUser.rows.length === 0) {
-      existingUser = await database.query(
-        'SELECT id, email FROM users WHERE LOWER(email) = $1 LIMIT 1',
-        [email.toLowerCase()]
-      );
-    }
+    // Note: Database uses user_id, not id. The first query should work.
+    // If no result, the user doesn't exist (which is what we want for registration)
   } catch (dbError) {
     console.error('Database query error:', dbError);
     throw CreateError(`Database error: ${dbError.message}`, 500);
@@ -52,9 +47,13 @@ const RegistrationService = async (Request) => {
 
   // Prepare user data
   const normalizedRole = role?.toLowerCase() || 'employee';
-  const fullName = first_name && last_name 
-    ? `${first_name} ${last_name}`.trim()
-    : first_name || last_name || email.split('@')[0];
+  // Ensure first_name is never null (it's NOT NULL in database)
+  // Use email prefix if first_name is not provided
+  const finalFirstName = first_name || email.split('@')[0] || 'User';
+  const finalLastName = last_name || null;
+  const fullName = finalFirstName && finalLastName 
+    ? `${finalFirstName} ${finalLastName}`.trim()
+    : finalFirstName;
 
   // Insert user - handle both schema types
   let userResult;
@@ -62,6 +61,7 @@ const RegistrationService = async (Request) => {
   
   try {
     // Try new schema first (user_id, first_name, last_name)
+    // Note: first_name is NOT NULL in database, so we ensure it's never null
     userResult = await database.query(
       `INSERT INTO users (email, password_hash, first_name, last_name, role, status, department, designation)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -69,8 +69,8 @@ const RegistrationService = async (Request) => {
       [
         email.toLowerCase(),
         passwordHash,
-        first_name || null,
-        last_name || null,
+        finalFirstName, // Never null - required field
+        finalLastName, // Can be null
         normalizedRole,
         'Active',
         department || null,
@@ -196,14 +196,15 @@ const RegistrationService = async (Request) => {
       }
 
       // Try to insert employee record with ON CONFLICT
+      // NOTE: employees table does NOT have 'role' column - role is in users table
+      // Employees table has: user_id, location, team, designation, manager_id
       try {
         await database.query(
-          `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-           VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO employees (user_id, location, team, designation, manager_id)
+           VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (user_id) DO NOTHING`,
           [
             userId,
-            normalizedRole,
             null, // location
             department || null, // team/department
             designation || null,
@@ -224,11 +225,10 @@ const RegistrationService = async (Request) => {
         if (empInsertError.code === '42P01' || empInsertError.code === '42703' || empInsertError.message.includes('ON CONFLICT') || empInsertError.message.includes('column')) {
           try {
             await database.query(
-              `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-               VALUES ($1, $2, $3, $4, $5, $6)`,
+              `INSERT INTO employees (user_id, location, team, designation, manager_id)
+               VALUES ($1, $2, $3, $4, $5)`,
               [
                 userId,
-                normalizedRole,
                 null,
                 department || null,
                 designation || null,
@@ -238,15 +238,15 @@ const RegistrationService = async (Request) => {
             console.log('✅ Employee record created with simple INSERT');
           } catch (simpleInsertError) {
             console.warn('⚠️ Simple INSERT failed, trying minimal insert:', simpleInsertError.message);
-            // If that fails due to missing columns, try minimal insert
+            // If that fails due to missing columns, try minimal insert (just user_id)
             if (simpleInsertError.code === '42703' || simpleInsertError.message.includes('column')) {
               try {
                 await database.query(
-                  `INSERT INTO employees (user_id, role)
-                   VALUES ($1, $2)`,
-                  [userId, normalizedRole]
+                  `INSERT INTO employees (user_id)
+                   VALUES ($1)`,
+                  [userId]
                 );
-                console.log('✅ Employee record created with minimal fields');
+                console.log('✅ Employee record created with minimal fields (user_id only)');
               } catch (minInsertError) {
                 console.warn('⚠️ Could not create employee record (minimal insert failed):', minInsertError.message);
                 // Don't fail registration if employee record creation fails

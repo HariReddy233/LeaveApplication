@@ -260,13 +260,18 @@ export const CreateLeaveService = async (Request) => {
           }
         }
 
-        // Get Admin emails
+        // Get assigned Admin (first admin found - one admin for all users)
         const adminResult = await database.query(
           `SELECT email, 
-           COALESCE(first_name || ' ' || last_name, first_name, last_name, email) as full_name
+           COALESCE(
+             NULLIF(TRIM(first_name || ' ' || last_name), ''),
+             first_name,
+             last_name,
+             email
+           ) as full_name
            FROM users 
-           WHERE role IN ('Admin', 'admin', 'ADMIN')
-           LIMIT 10`
+           WHERE LOWER(TRIM(role)) = 'admin'
+           LIMIT 1`
         );
 
         // Send email to ASSIGNED HOD ONLY (not all HODs) - Non-blocking
@@ -314,108 +319,111 @@ export const CreateLeaveService = async (Request) => {
           console.error(`❌ ERROR: No HOD found for employee ${employee.employee_email}. manager_id: ${employee.manager_id || 'NULL'}, department: ${employee.department || 'NULL'}, location: ${employee.location || 'NULL'}`);
         }
 
-        // Send email to Admins - Non-blocking
+        // Send email to ASSIGNED ADMIN ONLY (not all admins) - Non-blocking
         if (adminStatus === 'Pending' && adminResult.rows.length > 0) {
-          for (const admin of adminResult.rows) {
-            // Generate approval tokens for Admin
-            try {
-              const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
-              const baseUrl = getBaseUrl();
-              // Send email asynchronously without blocking the response
-              sendLeaveApplicationEmail({
-                to: admin.email,
-                approver_name: admin.full_name,
-                employee_email: employee.employee_email,
-                employee_name: employee.employee_name,
-                leave_type: leave_type,
-                start_date: start_date,
-                end_date: end_date,
-                number_of_days: numDays,
-                reason: reason || leave_details || null,
-                approveToken: tokens.approveToken,
-                rejectToken: tokens.rejectToken,
-                baseUrl: baseUrl
-              }).catch((adminEmailErr) => {
-                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-              });
-            } catch (tokenError) {
-              console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
-              // Send email without tokens as fallback
-              sendLeaveApplicationEmail({
-                to: admin.email,
-                approver_name: admin.full_name,
-                employee_email: employee.employee_email,
-                employee_name: employee.employee_name,
-                leave_type: leave_type,
-                start_date: start_date,
-                end_date: end_date,
-                number_of_days: numDays,
-                reason: reason || leave_details || null
-              }).catch((adminEmailErr) => {
-                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-              });
-            }
+          const admin = adminResult.rows[0];
+          // Generate approval tokens for Admin
+          try {
+            const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
+            const baseUrl = getBaseUrl();
+            // Send email asynchronously without blocking the response
+            sendLeaveApplicationEmail({
+              to: admin.email,
+              approver_name: admin.full_name,
+              employee_email: employee.employee_email,
+              employee_name: employee.employee_name,
+              leave_type: leave_type,
+              start_date: start_date,
+              end_date: end_date,
+              number_of_days: numDays,
+              reason: reason || leave_details || null,
+              approveToken: tokens.approveToken,
+              rejectToken: tokens.rejectToken,
+              baseUrl: baseUrl
+            }).catch((adminEmailErr) => {
+              console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+            });
+          } catch (tokenError) {
+            console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
+            // Send email without tokens as fallback
+            sendLeaveApplicationEmail({
+              to: admin.email,
+              approver_name: admin.full_name,
+              employee_email: employee.employee_email,
+              employee_name: employee.employee_name,
+              leave_type: leave_type,
+              start_date: start_date,
+              end_date: end_date,
+              number_of_days: numDays,
+              reason: reason || leave_details || null
+            }).catch((adminEmailErr) => {
+              console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+            });
           }
         }
       }
-      // If HOD applies: Send email to Admin only
+      // If HOD applies: Send email to assigned Admin only
       else if ((Role?.toLowerCase() === 'hod' || Role === 'HOD') && adminStatus === 'Pending') {
-        // Get Admin emails
+        // Get assigned Admin (first admin found - one admin for all users)
         const adminResult = await database.query(
           `SELECT email, 
-           COALESCE(first_name || ' ' || last_name, first_name, last_name, email) as full_name
+           COALESCE(
+             NULLIF(TRIM(first_name || ' ' || last_name), ''),
+             first_name,
+             last_name,
+             email
+           ) as full_name
            FROM users 
-           WHERE role IN ('Admin', 'admin', 'ADMIN')
-           LIMIT 10`
+           WHERE LOWER(TRIM(role)) = 'admin'
+           LIMIT 1`
         );
 
-        // Send email to Admins - Non-blocking
+        // Send email to ASSIGNED ADMIN ONLY - Non-blocking
         if (adminResult.rows.length > 0) {
-          for (const admin of adminResult.rows) {
-            // Generate approval tokens for Admin
-            try {
-              const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
-              const baseUrl = getBaseUrl();
-              // Send email asynchronously without blocking the response
-              sendLeaveApplicationEmail({
-                to: admin.email,
-                approver_name: admin.full_name,
-                employee_email: employee.employee_email,
-                employee_name: employee.employee_name,
-                leave_type: leave_type,
-                start_date: start_date,
-                end_date: end_date,
-                number_of_days: numDays,
-                reason: reason || leave_details || null,
-                approveToken: tokens.approveToken,
-                rejectToken: tokens.rejectToken,
-                baseUrl: baseUrl
-              }).catch((adminEmailErr) => {
-                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-              });
-            } catch (tokenError) {
-              console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
-              // Send email without tokens as fallback
-              sendLeaveApplicationEmail({
-                to: admin.email,
-                approver_name: admin.full_name,
-                employee_email: employee.employee_email,
-                employee_name: employee.employee_name,
-                leave_type: leave_type,
-                start_date: start_date,
-                end_date: end_date,
-                number_of_days: numDays,
-                reason: reason || leave_details || null
-              }).catch((adminEmailErr) => {
-                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-              });
-            }
+          const admin = adminResult.rows[0];
+          // Generate approval tokens for Admin
+          try {
+            const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
+            const baseUrl = getBaseUrl();
+            // Send email asynchronously without blocking the response
+            sendLeaveApplicationEmail({
+              to: admin.email,
+              approver_name: admin.full_name,
+              employee_email: employee.employee_email,
+              employee_name: employee.employee_name,
+              leave_type: leave_type,
+              start_date: start_date,
+              end_date: end_date,
+              number_of_days: numDays,
+              reason: reason || leave_details || null,
+              approveToken: tokens.approveToken,
+              rejectToken: tokens.rejectToken,
+              baseUrl: baseUrl
+            }).catch((adminEmailErr) => {
+              console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+            });
+          } catch (tokenError) {
+            console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
+            // Send email without tokens as fallback
+            sendLeaveApplicationEmail({
+              to: admin.email,
+              approver_name: admin.full_name,
+              employee_email: employee.employee_email,
+              employee_name: employee.employee_name,
+              leave_type: leave_type,
+              start_date: start_date,
+              end_date: end_date,
+              number_of_days: numDays,
+              reason: reason || leave_details || null
+            }).catch((adminEmailErr) => {
+              console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+            });
           }
         }
       }
-      // If Admin applies leave, send organization-wide notification
+      // If Admin applies leave, send organization-wide notification (no approval emails)
       else if (isAdmin && finalStatus === 'Approved') {
-        const { sendLeaveApprovalEmail } = await import('../../utils/emailService.js');
+        const { sendLeaveInfoNotificationEmail } = await import('../../utils/emailService.js');
         
         // Get all active users for organization-wide notification
         const allUsersResult = await database.query(
@@ -433,19 +441,21 @@ export const CreateLeaveService = async (Request) => {
           [employee.employee_email]
         );
 
-        // Send notification email to all users (non-blocking)
+        // Send informational notification email to all users (non-blocking)
+        // Admin leaves are auto-approved, so we send org-wide notification saying "vacation"
         for (const user of allUsersResult.rows) {
           if (user.email) {
-            sendLeaveApprovalEmail({
-              employee_email: user.email,
-              employee_name: user.full_name,
+            sendLeaveInfoNotificationEmail({
+              to: user.email,
+              recipient_name: user.full_name,
+              employee_name: employee.employee_name,
               leave_type: leave_type,
               start_date: start_date,
               end_date: end_date,
               number_of_days: numDays,
-              status: 'Approved',
-              remark: `Admin leave approved for ${employee.employee_name}. This is an organization-wide notification.`
-            }, employee.employee_name).catch((emailErr) => {
+              approver_name: employee.employee_name,
+              is_admin_vacation: true // Flag to indicate this is admin vacation notification
+            }).catch((emailErr) => {
               console.error(`Failed to send org-wide notification to ${user.email}:`, emailErr.message);
             });
           }
@@ -1082,18 +1092,18 @@ export const ApproveLeaveHodService = async (Request) => {
 
   const updatedLeave = result.rows[0];
 
-  // Determine final status: Both HOD and Admin must approve. If any one rejects, leave is rejected.
+  // Determine final status: If either HOD or Admin approves, leave is Approved. If any one rejects, leave is Rejected.
   const hodStatus = status;
   const adminStatus = updatedLeave.admin_status || 'Pending';
   
   let finalStatus = 'Pending';
   if (hodStatus === 'Rejected' || adminStatus === 'Rejected') {
     finalStatus = 'Rejected';
-  } else if (hodStatus === 'Approved' && adminStatus === 'Approved') {
-    // Both must approve for final approval
+  } else if (hodStatus === 'Approved' || adminStatus === 'Approved') {
+    // Either HOD or Admin approval results in Approved status
     finalStatus = 'Approved';
   } else {
-    // Still waiting for the other approver
+    // Still waiting for approval
     finalStatus = 'Pending';
   }
 
@@ -1243,12 +1253,12 @@ export const ApproveLeaveHodService = async (Request) => {
     // Silent fail - don't block the response
   }
 
-  // If HOD approved/rejected and Admin status is still pending, notify all admins
+  // If HOD approved/rejected and Admin status is still pending, notify assigned Admin
   if ((status === 'Approved' || status === 'Rejected') && adminStatus === 'Pending') {
     try {
       const { sendLeaveApplicationEmail } = await import('../../utils/emailService.js');
       
-      // Get all Admin emails
+      // Get assigned Admin (first admin found - one admin for all users)
       const adminResult = await database.query(
         `SELECT email, 
          COALESCE(
@@ -1259,15 +1269,19 @@ export const ApproveLeaveHodService = async (Request) => {
          ) as full_name
          FROM users 
          WHERE LOWER(TRIM(role)) = 'admin'
-         LIMIT 10`
+         LIMIT 1`
       );
 
       // Get HOD name who approved/rejected (use approverName which was already fetched)
       const hodName = approverName;
 
-      // Send email to all admins
+      // Send email to assigned Admin only
       if (adminResult.rows.length > 0) {
-        for (const admin of adminResult.rows) {
+        const admin = adminResult.rows[0];
+        // Generate approval tokens for Admin
+        try {
+          const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
+          const baseUrl = getBaseUrl();
           await sendLeaveApplicationEmail({
             to: admin.email,
             approver_name: admin.full_name,
@@ -1279,12 +1293,31 @@ export const ApproveLeaveHodService = async (Request) => {
             number_of_days: leave.number_of_days,
             reason: leave.reason || null,
             hod_status: status, // 'Approved' or 'Rejected'
+            hod_name: hodName,
+            approveToken: tokens.approveToken,
+            rejectToken: tokens.rejectToken,
+            baseUrl: baseUrl
+          });
+        } catch (tokenError) {
+          console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
+          // Send email without tokens as fallback
+          await sendLeaveApplicationEmail({
+            to: admin.email,
+            approver_name: admin.full_name,
+            employee_email: leave.employee_email,
+            employee_name: leave.employee_name,
+            leave_type: leave.leave_type,
+            start_date: leave.start_date,
+            end_date: leave.end_date,
+            number_of_days: leave.number_of_days,
+            reason: leave.reason || null,
+            hod_status: status,
             hod_name: hodName
           });
         }
       }
     } catch (adminNotifyError) {
-      console.error('Failed to notify admins:', adminNotifyError);
+      console.error('Failed to notify assigned Admin:', adminNotifyError);
     }
   }
 
@@ -1363,18 +1396,18 @@ export const ApproveLeaveAdminService = async (Request) => {
 
   const updatedLeave = result.rows[0];
 
-  // Determine final status: Both HOD and Admin must approve. If any one rejects, leave is rejected.
+  // Determine final status: If either HOD or Admin approves, leave is Approved. If any one rejects, leave is Rejected.
   const adminStatus = status;
   const hodStatus = updatedLeave.hod_status || 'Pending';
   
   let finalStatus = 'Pending';
   if (hodStatus === 'Rejected' || adminStatus === 'Rejected') {
     finalStatus = 'Rejected';
-  } else if (hodStatus === 'Approved' && adminStatus === 'Approved') {
-    // Both must approve for final approval
+  } else if (hodStatus === 'Approved' || adminStatus === 'Approved') {
+    // Either HOD or Admin approval results in Approved status
     finalStatus = 'Approved';
   } else {
-    // Still waiting for the other approver
+    // Still waiting for approval
     finalStatus = 'Pending';
   }
 
