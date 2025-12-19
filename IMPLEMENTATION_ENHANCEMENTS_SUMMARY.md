@@ -221,5 +221,3 @@ The system now has:
 
 
 
-
-

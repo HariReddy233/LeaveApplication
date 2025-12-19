@@ -535,18 +535,8 @@ export const sendLeaveApprovalEmail = async ({
               
               <div class="status-section">
                 <div class="status-badge">${statusText}</div>
-                ${isApproved ? `<div class="approver-info">Approved by: ${approverName}</div>` : ''}
+                <div class="approver-info">Approved by: ${approverName}</div>
               </div>
-              
-              ${isApproved ? `
-              <p style="color: #374151; font-size: 14px; margin: 16px 0; line-height: 1.6; text-align: center;">
-                Your leave request has been approved by <strong>${approverName}</strong> for the period <strong>${startDate}</strong> to <strong>${endDate}</strong>.
-              </p>
-              ` : `
-              <p style="color: #374151; font-size: 14px; margin: 16px 0; line-height: 1.6; text-align: center;">
-                Your leave request has been rejected by <strong>${approverName}</strong>.
-              </p>
-              `}
               
               <div class="info-card">
                 <div class="info-card-title">
@@ -604,9 +594,7 @@ export const sendLeaveApprovalEmail = async ({
 
 Dear ${employee_name || 'Employee'},
 
-${isApproved 
-  ? `Your leave request has been approved by ${approverName} for the period ${startDate} to ${endDate}.`
-  : `Your leave request has been rejected by ${approverName}.`}
+Your leave application has been ${statusText} by ${approverName}.
 
 Leave Type: ${leave_type || 'N/A'}
 Start Date: ${startDate}
@@ -644,8 +632,7 @@ export const sendLeaveInfoNotificationEmail = async ({
   start_date,
   end_date,
   number_of_days,
-  approver_name,
-  is_admin_vacation = false
+  approver_name
 }) => {
   try {
     // Check if email is configured
@@ -673,20 +660,10 @@ export const sendLeaveInfoNotificationEmail = async ({
       day: 'numeric'
     });
 
-    // Determine message based on context
-    const leaveTerm = is_admin_vacation ? 'vacation' : 'leave';
-    const notificationMessage = is_admin_vacation 
-      ? `<strong>${employee_name}</strong> will be on vacation from <strong>${startDate}</strong> to <strong>${endDate}</strong>.`
-      : approver_name 
-        ? `<strong>${approver_name}</strong> approved the leave request of <strong>${employee_name}</strong>.<br><strong>${employee_name}</strong> will be on leave from <strong>${startDate}</strong> to <strong>${endDate}</strong>.`
-        : `<strong>${employee_name}</strong>'s leave has been approved and they will not be available during this period.`;
-
     const mailOptions = {
       from: `"${process.env.EMAIL_FROM_NAME || 'Consultare Leave Management'}" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
       to: to,
-      subject: is_admin_vacation 
-        ? `Vacation Notification: ${employee_name} will be on vacation`
-        : `Leave Notification: ${employee_name} will be on leave`,
+      subject: `Leave Notification: ${employee_name} will be on leave`,
       html: `
         <!DOCTYPE html>
         <html>
@@ -774,23 +751,23 @@ export const sendLeaveInfoNotificationEmail = async ({
               <div class="greeting">Dear ${recipient_name || 'Team Member'},</div>
               
               <div style="text-align: center; margin: 16px 0;">
-                <div class="info-badge">📢 ${is_admin_vacation ? 'Vacation' : 'Leave'} Notification</div>
+                <div class="info-badge">📢 Leave Notification</div>
               </div>
               
-              <p style="color: #374151; font-size: 14px; margin: 16px 0; line-height: 1.6;">
-                ${notificationMessage}
+              <p style="color: #374151; font-size: 14px; margin: 16px 0;">
+                This is to inform you that <strong>${employee_name}</strong>'s leave has been approved and they will not be available during this period.
               </p>
               
               <div class="info-card">
                 <div style="font-weight: 600; color: #1e40af; margin-bottom: 10px; font-size: 13px;">
-                  📅 ${is_admin_vacation ? 'Vacation' : 'Leave'} Details
+                  📅 Leave Details
                 </div>
                 <div class="info-row">
                   <span class="info-label">Employee:</span>
                   <span class="info-value">${employee_name}</span>
                 </div>
                 <div class="info-row">
-                  <span class="info-label">${is_admin_vacation ? 'Vacation' : 'Leave'} Type:</span>
+                  <span class="info-label">Leave Type:</span>
                   <span class="info-value">${leave_type || 'N/A'}</span>
                 </div>
                 <div class="info-row">
@@ -805,7 +782,7 @@ export const sendLeaveInfoNotificationEmail = async ({
                   <span class="info-label">Duration:</span>
                   <span class="info-value">${number_of_days || 'N/A'} day${number_of_days !== 1 ? 's' : ''}</span>
                 </div>
-                ${approver_name && !is_admin_vacation ? `
+                ${approver_name ? `
                 <div class="info-row">
                   <span class="info-label">Approved by:</span>
                   <span class="info-value">${approver_name}</span>
@@ -827,27 +804,11 @@ export const sendLeaveInfoNotificationEmail = async ({
         </body>
         </html>
       `,
-      text: is_admin_vacation 
-        ? `Vacation Notification
+      text: `Leave Notification
 
 Dear ${recipient_name || 'Team Member'},
 
-${employee_name} will be on vacation from ${startDate} to ${endDate}.
-
-Employee: ${employee_name}
-Vacation Type: ${leave_type || 'N/A'}
-Start Date: ${startDate}
-End Date: ${endDate}
-Number of Days: ${number_of_days || 'N/A'}
-
-This is an informational notification for your awareness. No action is required.
-
-© ${new Date().getFullYear()} Consultare Leave Management System`
-        : `Leave Notification
-
-Dear ${recipient_name || 'Team Member'},
-
-${approver_name ? `${approver_name} approved the leave request of ${employee_name}.\n${employee_name} will be on leave from ${startDate} to ${endDate}.` : `${employee_name}'s leave has been approved and they will not be available during this period.`}
+This is to inform you that ${employee_name}'s leave has been approved and they will not be available during this period.
 
 Employee: ${employee_name}
 Leave Type: ${leave_type || 'N/A'}
