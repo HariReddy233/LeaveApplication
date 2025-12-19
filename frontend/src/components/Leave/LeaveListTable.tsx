@@ -659,9 +659,6 @@ export default function LeaveListTable({
                     <option value="">Loading users...</option>
                   )}
                 </select>
-                {users.length > 0 && (
-                  <span className="ml-2 text-xs text-gray-500">({users.length} users)</span>
-                )}
               </div>
             )}
             <div className="flex items-center gap-2">
@@ -690,10 +687,7 @@ export default function LeaveListTable({
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Leave Type</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Application Date</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Total Day</th>
-                  {/* Hide HOD Status column for Admin only */}
-                  {userRole?.toLowerCase() !== 'admin' && (
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Hod Status</th>
-                  )}
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">HOD Status</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Admin Status</th>
                   {showActions && (
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Action</th>
@@ -728,20 +722,34 @@ export default function LeaveListTable({
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-900">{record.NumOfDay || record.number_of_days || 'N/A'}</td>
                         <td className="px-4 py-3">
-                          <div className="flex flex-col gap-1">
-                            <span
-                              className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
-                                'bg-green-100 text-green-800': (record.HodStatus || record.hod_status) === 'Approved',
-                                'bg-yellow-100 text-yellow-800': (record.HodStatus || record.hod_status) === 'Pending',
-                                'bg-red-100 text-red-800': (record.HodStatus || record.hod_status) === 'Rejected',
-                              })}
-                            >
-                              {record.HodStatus || record.hod_status || 'Pending'}
-                            </span>
-                            {(record.HodApproverName || record.hod_approver_name) && (record.HodStatus || record.hod_status) === 'Approved' && (
-                              <span className="text-xs text-gray-500">by {record.HodApproverName || record.hod_approver_name}</span>
-                            )}
-                          </div>
+                          {(() => {
+                            const hodStatus = record.HodStatus || record.hod_status || 'Pending';
+                            const hodRemark = record.hod_remark || record.HodRemark || '';
+                            const hodApproverName = record.HodApproverName || record.hod_approver_name;
+                            // Check if this is an Admin-applied leave (auto-approved, no HOD approval needed)
+                            const isAdminApplied = hodStatus === 'Approved' && hodRemark === 'Autoapproved' && !hodApproverName;
+                            
+                            if (isAdminApplied) {
+                              return <span className="text-sm text-gray-500">-</span>;
+                            }
+                            
+                            return (
+                              <div className="flex flex-col gap-1">
+                                <span
+                                  className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
+                                    'bg-green-100 text-green-800': hodStatus === 'Approved',
+                                    'bg-yellow-100 text-yellow-800': hodStatus === 'Pending',
+                                    'bg-red-100 text-red-800': hodStatus === 'Rejected',
+                                  })}
+                                >
+                                  {hodStatus}
+                                </span>
+                                {hodApproverName && hodStatus === 'Approved' && (
+                                  <span className="text-xs text-gray-500">by {hodApproverName}</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-col gap-1">

@@ -207,16 +207,6 @@ export default function CalendarPage() {
   // Main calendar view
   return (
     <div className="space-y-3">
-      {/* Compact Header - Reduced Height */}
-      <div className="bg-white rounded-lg border border-gray-200 p-3">
-        <h1 className="text-lg font-semibold text-gray-900" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-          Approved Leave Calendar
-        </h1>
-        <p className="text-gray-600 text-xs mt-0.5" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-          Organization-wide view of all approved leaves
-        </p>
-      </div>
-
       {/* Compact Filters - Reduced Height */}
       <div className="bg-white rounded-lg border border-gray-200 p-3 mb-3">
         <div className="flex items-center gap-4">
@@ -349,7 +339,7 @@ export default function CalendarPage() {
                         }`}
                         title={tooltipText}
                       >
-                        {isStart ? (leave.full_name || leave.email || 'Unknown').split(' ')[0] : '...'}
+                        {(leave.full_name || leave.email || 'Unknown').split(' ')[0]}
                       </div>
                     );
                   })}

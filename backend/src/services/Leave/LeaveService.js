@@ -66,12 +66,12 @@ export const CreateLeaveService = async (Request) => {
 
   // Set initial statuses based on role (matching HR Portal)
   // If HOD creates leave, HOD status is auto-approved
-  // If Admin creates leave, both are auto-approved and status is 'Approved'
+  // If Admin creates leave, both HOD and Admin status are auto-approved and status is 'Approved'
   const isAdmin = (Role === 'admin' || Role === 'ADMIN');
   const isHod = (Role === 'hod' || Role === 'HOD');
-  const hodStatus = isHod ? 'Approved' : 'Pending';
+  const hodStatus = (isHod || isAdmin) ? 'Approved' : 'Pending';
   const adminStatus = isAdmin ? 'Approved' : 'Pending';
-  const hodRemark = isHod ? 'Autoapproved' : null;
+  const hodRemark = (isHod || isAdmin) ? 'Autoapproved' : null;
   const adminRemark = isAdmin ? 'Autoapproved' : null;
   // Admin leaves are fully approved immediately
   const finalStatus = isAdmin ? 'Approved' : 'pending';
@@ -1071,13 +1071,13 @@ export const ApproveLeaveHodService = async (Request) => {
   const result = await database.query(
     `UPDATE leave_applications 
      SET hod_status = $1, 
-         hod_remark = COALESCE($2, NULL), 
+         hod_remark = $2::text, 
          approved_by_hod = $3, 
          hod_approved_at = NOW(),
          updated_at = NOW()
      WHERE id = $4
      RETURNING *`,
-    [status, hodRemark, approvedByHod, parseInt(id)]
+    [status, hodRemark, approvedByHod, parseInt(id, 10)]
   );
 
   const updatedLeave = result.rows[0];
@@ -1344,21 +1344,21 @@ export const ApproveLeaveAdminService = async (Request) => {
 
   // Update Admin status
   // Ensure empId is an integer or null, and comment is null if empty
-  const approvedByAdmin = empId ? parseInt(empId) : null;
+  const approvedByAdmin = empId ? parseInt(empId, 10) : null;
   // Convert empty string/undefined to null for proper SQL handling
   const adminRemark = (comment && typeof comment === 'string' && comment.trim()) ? comment.trim() : null;
   
-  // Use explicit parameter types to avoid PostgreSQL type inference issues
+  // Use explicit type casting to avoid PostgreSQL type inference issues
   const result = await database.query(
     `UPDATE leave_applications 
-     SET admin_status = $1::text, 
+     SET admin_status = $1, 
          admin_remark = $2::text, 
-         approved_by_admin = $3::integer, 
+         approved_by_admin = $3, 
          admin_approved_at = NOW(),
          updated_at = NOW()
-     WHERE id = $4::integer
+     WHERE id = $4
      RETURNING *`,
-    [status, adminRemark, approvedByAdmin, parseInt(id)]
+    [status, adminRemark, approvedByAdmin, parseInt(id, 10)]
   );
 
   const updatedLeave = result.rows[0];
