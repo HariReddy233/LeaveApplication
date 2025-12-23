@@ -91,9 +91,10 @@ export default function ManageAuthorizationsPage() {
     }
     
     setSelectedUser(user);
-    // Check ALL permissions by default (all permission IDs)
-    const allPermIds = new Set(allPermissions.map(p => p.permission_id));
-    setUserPermissions(allPermIds);
+    // Initialize with the user's CURRENT permissions only.
+    // Admin can then add/remove specific permissions from this baseline.
+    const currentPermIds = new Set(user.permissions.map(p => p.permission_id));
+    setUserPermissions(currentPermIds);
     setHasChanges(false);
   };
 
@@ -144,6 +145,12 @@ export default function ManageAuthorizationsPage() {
       }
       
       alert('Permissions updated successfully!');
+
+      // After any successful action in Manage Authorizations, refresh the page
+      // to ensure all data and UI are fully in sync.
+      if (typeof window !== 'undefined') {
+        window.location.reload();
+      }
     } catch (error: any) {
       console.error('Failed to save permissions:', error);
       alert(error.response?.data?.message || 'Failed to save permissions');
