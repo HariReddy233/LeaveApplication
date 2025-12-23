@@ -6,17 +6,32 @@ import { usePathname } from 'next/navigation';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import classNames from 'classnames';
 import { getMenuItems, MenuItem } from '@/utils/menu';
+import { loadUserPermissions, getUserPermissions } from '@/utils/permissions';
 
 type MenuProps = {
   userRole?: string;
+  userPermissions?: string[];
 };
 
-export default function Menu({ userRole }: MenuProps) {
+export default function Menu({ userRole, userPermissions }: MenuProps) {
   const pathname = usePathname();
   const [openMenus, setOpenMenus] = useState<string[]>([]);
+  const [permissions, setPermissions] = useState<string[]>(userPermissions || []);
+  
+  // Load permissions if not provided
+  useEffect(() => {
+    if (!userPermissions && userRole) {
+      loadUserPermissions().then(perms => {
+        setPermissions(perms);
+      });
+    }
+  }, [userRole, userPermissions]);
   
   // Memoize menuItems to prevent infinite loop
-  const menuItems = useMemo(() => getMenuItems(userRole), [userRole]);
+  const menuItems = useMemo(() => {
+    const perms = userPermissions || permissions;
+    return getMenuItems(userRole, perms);
+  }, [userRole, userPermissions, permissions]);
 
   useEffect(() => {
     // Auto-open menu if current path matches a child
@@ -59,7 +74,7 @@ export default function Menu({ userRole }: MenuProps) {
   const renderMenuItem = (item: MenuItem, level: number = 0) => {
     if (item.isTitle) {
       return (
-        <li key={item.key} className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+        <li key={item.key} className="px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider mt-4 first:mt-0">
           {item.label}
         </li>
       );
@@ -76,13 +91,12 @@ export default function Menu({ userRole }: MenuProps) {
           <button
             onClick={() => toggleMenu(item.key)}
             className={classNames(
-              'w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-colors text-sm font-medium',
+              'w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all text-sm font-medium',
               {
-                'bg-blue-600 text-white': hasActiveChild,
-                'text-gray-700 hover:bg-gray-100': !hasActiveChild,
+                'bg-blue-600 text-white shadow-sm': hasActiveChild,
+                'text-gray-700 hover:bg-gray-100 hover:text-gray-900': !hasActiveChild,
               }
             )}
-            style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
           >
             <div className="flex items-center gap-3">
               <span className={hasActiveChild ? 'text-white' : 'text-gray-500'}>
@@ -97,7 +111,7 @@ export default function Menu({ userRole }: MenuProps) {
             )}
           </button>
           {isOpen && (
-            <ul className="ml-4 mt-1 space-y-1">
+            <ul className="ml-4 mt-1.5 space-y-1">
               {item.children.map((child) => renderMenuItem(child, level + 1))}
             </ul>
           )}
@@ -119,13 +133,12 @@ export default function Menu({ userRole }: MenuProps) {
         <Link
           href={item.url || '#'}
           className={classNames(
-            'flex items-center px-3 py-2.5 rounded-lg transition-colors text-sm font-medium',
+            'flex items-center px-3 py-2.5 rounded-lg transition-all text-sm font-medium',
             {
-              'bg-blue-600 text-white': isActive,
-              'text-gray-700 hover:bg-gray-100': !isActive,
+              'bg-blue-600 text-white shadow-sm': isActive,
+              'text-gray-700 hover:bg-gray-100 hover:text-gray-900': !isActive,
             }
           )}
-          style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
         >
           {item.icon && (
             <span className={`mr-3 ${isActive ? 'text-white' : 'text-gray-500'}`}>

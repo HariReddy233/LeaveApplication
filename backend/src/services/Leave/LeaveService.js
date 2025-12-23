@@ -2,7 +2,7 @@
 import database from "../../config/database.js";
 import { CreateError } from "../../helper/ErrorHandler.js";
 import sseService from "../SSE/SSEService.js";
-import { createApprovalTokens, getBaseUrl } from "../../utils/approvalToken.js";
+import { createApprovalToken, getBaseUrl } from "../../utils/approvalToken.js";
 
 /**
  * Create Leave Application
@@ -64,28 +64,70 @@ export const CreateLeaveService = async (Request) => {
     );
   }
 
+  // Check leave exhaustion - validate available balance before creating leave
+  const year = new Date(start_date).getFullYear();
+  const balanceCheck = await database.query(
+    `SELECT total_balance, used_balance, remaining_balance
+     FROM leave_balance
+     WHERE employee_id = $1 AND leave_type = $2 AND year = $3
+     LIMIT 1`,
+    [empId, leave_type, year]
+  );
+
+  // Get default balance from leave_types if no balance record exists
+  let availableBalance = 0;
+  if (balanceCheck.rows.length > 0) {
+    availableBalance = balanceCheck.rows[0].remaining_balance || 0;
+  } else {
+    // No balance record exists, get default from leave_types
+    const leaveTypeResult = await database.query(
+      `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+      [leave_type]
+    );
+    
+    if (leaveTypeResult.rows.length > 0) {
+      const lt = leaveTypeResult.rows[0];
+      // Use max_days from database (fully dynamic)
+      availableBalance = lt.max_days || 0;
+    }
+  }
+
+  // Check if user has exhausted available balance
+  if (availableBalance < numDays) {
+    throw CreateError(
+      `You have exhausted your available balance for ${leave_type}. Available: ${availableBalance} days, Requested: ${numDays} days.`,
+      400
+    );
+  }
+
   // Set initial statuses based on role (matching HR Portal)
   // If HOD creates leave, HOD status is auto-approved
   // If Admin creates leave, both HOD and Admin status are auto-approved and status is 'Approved'
   const isAdmin = (Role === 'admin' || Role === 'ADMIN');
   const isHod = (Role === 'hod' || Role === 'HOD');
-  const hodStatus = (isHod || isAdmin) ? 'Approved' : 'Pending';
+  // When admin applies leave, automatically approve HOD status as well
+  const hodStatus = (isAdmin || isHod) ? 'Approved' : 'Pending';
   const adminStatus = isAdmin ? 'Approved' : 'Pending';
-  const hodRemark = (isHod || isAdmin) ? 'Autoapproved' : null;
+  const hodRemark = (isAdmin || isHod) ? 'Autoapproved' : null;
   const adminRemark = isAdmin ? 'Autoapproved' : null;
   // Admin leaves are fully approved immediately
   const finalStatus = isAdmin ? 'Approved' : 'pending';
+  
+  // When admin applies leave, set approved_by_hod and approved_by_admin to admin's employee_id
+  // When HOD applies leave, set approved_by_hod to HOD's employee_id
+  const approvedByHod = (isAdmin || isHod) ? empId : null;
+  const approvedByAdmin = isAdmin ? empId : null;
 
   const result = await database.query(
     `INSERT INTO leave_applications (
       employee_id, leave_type, start_date, end_date, number_of_days, 
       reason, status, hod_status, admin_status, hod_remark, admin_remark,
-      applied_date, created_at
+      approved_by_hod, approved_by_admin, applied_date, created_at
     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
      RETURNING *`,
     [empId, leave_type, start_date, end_date, numDays, reason || leave_details || null, 
-     finalStatus, hodStatus, adminStatus, hodRemark, adminRemark]
+     finalStatus, hodStatus, adminStatus, hodRemark, adminRemark, approvedByHod, approvedByAdmin]
   );
 
   const leave = result.rows[0];
@@ -93,13 +135,40 @@ export const CreateLeaveService = async (Request) => {
   // If Admin applies leave, update balance immediately (since it's auto-approved)
   if (isAdmin && finalStatus === 'Approved') {
     const year = new Date(leave.start_date).getFullYear();
+    
+    // Get default total_balance from leave_types if balance doesn't exist
+    const leaveTypeResult = await database.query(
+      `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+      [leave.leave_type]
+    );
+    
+    let defaultBalance = 0;
+    if (leaveTypeResult.rows.length > 0) {
+      const lt = leaveTypeResult.rows[0];
+      // Use max_days from database (fully dynamic)
+      defaultBalance = lt.max_days || 0;
+    }
+    
+    // First, ensure the balance record exists with correct total_balance
     await database.query(
-      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
-       VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, remaining_balance, year)
+       VALUES ($1, $2, $5, 0, $5, $3)
        ON CONFLICT (employee_id, leave_type, year) 
        DO UPDATE SET 
-         used_balance = leave_balance.used_balance + $4,
+         total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
          updated_at = NOW()`,
+      [leave.employee_id, leave.leave_type, year, leave.number_of_days, defaultBalance]
+    );
+    
+    // Then update the used_balance and remaining_balance
+    await database.query(
+      `UPDATE leave_balance 
+       SET used_balance = used_balance + $4,
+           remaining_balance = GREATEST(0, total_balance - (used_balance + $4)),
+           updated_at = NOW()
+       WHERE employee_id = $1 
+       AND leave_type = $2 
+       AND year = $3`,
       [leave.employee_id, leave.leave_type, year, leave.number_of_days]
     );
     console.log(`✅ Admin leave balance updated immediately for ${leave.leave_type} (${leave.number_of_days} days)`);
@@ -136,6 +205,7 @@ export const CreateLeaveService = async (Request) => {
       const employee = empDetailsResult.rows[0];
 
       // Send real-time SSE event for new leave application
+      // Skip HOD notifications if admin is applying leave (admin leaves are auto-approved)
       try {
         // Get employee user_id for SSE notification
         const empUserResult = await database.query(
@@ -144,8 +214,8 @@ export const CreateLeaveService = async (Request) => {
         );
         const employeeUserId = empUserResult.rows[0]?.user_id;
 
-        // Notify assigned HOD (if exists)
-        if (employee.manager_id) {
+        // Notify assigned HOD (if exists) - ONLY if not admin applying (admin leaves don't need HOD approval)
+        if (employee.manager_id && !isAdmin) {
           const hodUserResult = await database.query(
             'SELECT user_id FROM employees WHERE employee_id = $1',
             [employee.manager_id]
@@ -162,19 +232,32 @@ export const CreateLeaveService = async (Request) => {
           }
         }
 
-        // Notify all admins
+        // Notify all admins (ALWAYS notify admins when employee applies, even if HOD status is pending)
+        // Admin needs to see all leave applications for approval
         const adminResult = await database.query(
-          'SELECT user_id FROM users WHERE LOWER(TRIM(role)) = \'admin\' LIMIT 10'
+          `SELECT user_id FROM users 
+           WHERE (LOWER(TRIM(role)) = 'admin' OR role IN ('Admin', 'admin', 'ADMIN'))
+           AND (status = 'Active' OR status IS NULL)
+           LIMIT 10`
         );
-        adminResult.rows.forEach(admin => {
-          sseService.sendToUser(admin.user_id.toString(), {
-            type: 'new_leave',
-            message: `New leave application from ${employee.employee_name}`,
-            leaveId: leave.id,
-            employeeName: employee.employee_name,
-            leaveType: leave.leave_type
+        if (adminResult.rows.length > 0) {
+          adminResult.rows.forEach(admin => {
+            try {
+              sseService.sendToUser(admin.user_id.toString(), {
+                type: 'new_leave',
+                message: `New leave application from ${employee.employee_name}`,
+                leaveId: leave.id,
+                employeeName: employee.employee_name,
+                leaveType: leave.leave_type
+              });
+            } catch (sseErr) {
+              console.error(`Failed to send SSE notification to admin ${admin.user_id}:`, sseErr);
+            }
           });
-        });
+          console.log(`✅ Sent SSE notifications to ${adminResult.rows.length} admin(s) for new leave application`);
+        } else {
+          console.warn('⚠️ No active admin users found for notifications');
+        }
       } catch (sseError) {
         // Silent fail - don't block the response
       }
@@ -272,9 +355,9 @@ export const CreateLeaveService = async (Request) => {
         // Send email to ASSIGNED HOD ONLY (not all HODs) - Non-blocking
         if (hodStatus === 'Pending' && hodResult && hodResult.rows.length > 0) {
           const hod = hodResult.rows[0];
-          // Generate approval tokens for HOD
+          // Generate approval token for HOD (one token for both approve/reject)
           try {
-            const tokens = await createApprovalTokens(leave.id, hod.email, 'hod');
+            const token = await createApprovalToken(leave.id, hod.email, 'hod');
             const baseUrl = getBaseUrl();
             // Send email asynchronously without blocking the response
             sendLeaveApplicationEmail({
@@ -287,8 +370,7 @@ export const CreateLeaveService = async (Request) => {
               end_date: end_date,
               number_of_days: numDays,
               reason: reason || leave_details || null,
-              approveToken: tokens.approveToken,
-              rejectToken: tokens.rejectToken,
+              approvalToken: token,
               baseUrl: baseUrl
             }).catch((emailErr) => {
               console.error(`Failed to send email to HOD ${hod.email}:`, emailErr.message);
@@ -317,9 +399,9 @@ export const CreateLeaveService = async (Request) => {
         // Send email to Admins - Non-blocking
         if (adminStatus === 'Pending' && adminResult.rows.length > 0) {
           for (const admin of adminResult.rows) {
-            // Generate approval tokens for Admin
+            // Generate approval token for Admin (one token for both approve/reject)
             try {
-              const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
+              const token = await createApprovalToken(leave.id, admin.email, 'admin');
               const baseUrl = getBaseUrl();
               // Send email asynchronously without blocking the response
               sendLeaveApplicationEmail({
@@ -332,8 +414,7 @@ export const CreateLeaveService = async (Request) => {
                 end_date: end_date,
                 number_of_days: numDays,
                 reason: reason || leave_details || null,
-                approveToken: tokens.approveToken,
-                rejectToken: tokens.rejectToken,
+                approvalToken: token,
                 baseUrl: baseUrl
               }).catch((adminEmailErr) => {
                 console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
@@ -372,9 +453,9 @@ export const CreateLeaveService = async (Request) => {
         // Send email to Admins - Non-blocking
         if (adminResult.rows.length > 0) {
           for (const admin of adminResult.rows) {
-            // Generate approval tokens for Admin
+            // Generate approval token for Admin (one token for both approve/reject)
             try {
-              const tokens = await createApprovalTokens(leave.id, admin.email, 'admin');
+              const token = await createApprovalToken(leave.id, admin.email, 'admin');
               const baseUrl = getBaseUrl();
               // Send email asynchronously without blocking the response
               sendLeaveApplicationEmail({
@@ -387,8 +468,7 @@ export const CreateLeaveService = async (Request) => {
                 end_date: end_date,
                 number_of_days: numDays,
                 reason: reason || leave_details || null,
-                approveToken: tokens.approveToken,
-                rejectToken: tokens.rejectToken,
+                approvalToken: token,
                 baseUrl: baseUrl
               }).catch((adminEmailErr) => {
                 console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
@@ -683,11 +763,27 @@ export const GetAllLeavesHodService = async (Request) => {
       COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
       u.email,
       u.first_name,
-      u.last_name
+      u.last_name,
+      COALESCE(
+        NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
+        hod_approver.first_name,
+        hod_approver.last_name,
+        hod_approver.email
+      ) as hod_approver_name,
+      COALESCE(
+        NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+        admin_approver.first_name,
+        admin_approver.last_name,
+        admin_approver.email
+      ) as admin_approver_name
     FROM leave_applications la
     JOIN employees e ON la.employee_id = e.employee_id
     JOIN users u ON e.user_id = u.user_id
     LEFT JOIN leave_types lt ON la.leave_type = lt.name
+    LEFT JOIN employees hod_emp ON la.approved_by_hod = hod_emp.employee_id
+    LEFT JOIN users hod_approver ON hod_emp.user_id = hod_approver.user_id
+    LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
+    LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
     WHERE (
       -- Priority 1: Direct manager assignment (employee's manager_id = logged-in HOD's employee_id)
       e.manager_id = $1
@@ -1071,13 +1167,13 @@ export const ApproveLeaveHodService = async (Request) => {
   const result = await database.query(
     `UPDATE leave_applications 
      SET hod_status = $1, 
-         hod_remark = $2::text, 
+         hod_remark = COALESCE($2, NULL), 
          approved_by_hod = $3, 
          hod_approved_at = NOW(),
          updated_at = NOW()
      WHERE id = $4
      RETURNING *`,
-    [status, hodRemark, approvedByHod, parseInt(id, 10)]
+    [status, hodRemark, approvedByHod, parseInt(id)]
   );
 
   const updatedLeave = result.rows[0];
@@ -1115,15 +1211,39 @@ export const ApproveLeaveHodService = async (Request) => {
   if (hodStatus === 'Approved' && !wasAlreadyDeducted) {
     const year = new Date(leave.start_date).getFullYear();
     
-    // Update or insert leave balance
-    // Deduct the days from remaining balance on first approval
+    // Get default total_balance from leave_types if balance doesn't exist
+    const leaveTypeResult = await database.query(
+      `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+      [leave.leave_type]
+    );
+    
+    let defaultBalance = 0;
+    if (leaveTypeResult.rows.length > 0) {
+      const lt = leaveTypeResult.rows[0];
+      // Use max_days from database (fully dynamic)
+      defaultBalance = lt.max_days || 0;
+    }
+    
+    // First, ensure the balance record exists with correct total_balance
     await database.query(
-      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
-       VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, remaining_balance, year)
+       VALUES ($1, $2, $5, 0, $5, $3)
        ON CONFLICT (employee_id, leave_type, year) 
        DO UPDATE SET 
-         used_balance = leave_balance.used_balance + $4,
+         total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
          updated_at = NOW()`,
+      [leave.employee_id, leave.leave_type, year, leave.number_of_days, defaultBalance]
+    );
+    
+    // Then update the used_balance and remaining_balance
+    await database.query(
+      `UPDATE leave_balance 
+       SET used_balance = used_balance + $4,
+           remaining_balance = GREATEST(0, total_balance - (used_balance + $4)),
+           updated_at = NOW()
+       WHERE employee_id = $1 
+       AND leave_type = $2 
+       AND year = $3`,
       [leave.employee_id, leave.leave_type, year, leave.number_of_days]
     );
     
@@ -1344,21 +1464,21 @@ export const ApproveLeaveAdminService = async (Request) => {
 
   // Update Admin status
   // Ensure empId is an integer or null, and comment is null if empty
-  const approvedByAdmin = empId ? parseInt(empId, 10) : null;
+  const approvedByAdmin = empId ? parseInt(empId) : null;
   // Convert empty string/undefined to null for proper SQL handling
   const adminRemark = (comment && typeof comment === 'string' && comment.trim()) ? comment.trim() : null;
   
-  // Use explicit type casting to avoid PostgreSQL type inference issues
+  // Use explicit parameter types to avoid PostgreSQL type inference issues
   const result = await database.query(
     `UPDATE leave_applications 
-     SET admin_status = $1, 
+     SET admin_status = $1::text, 
          admin_remark = $2::text, 
-         approved_by_admin = $3, 
+         approved_by_admin = $3::integer, 
          admin_approved_at = NOW(),
          updated_at = NOW()
-     WHERE id = $4
+     WHERE id = $4::integer
      RETURNING *`,
-    [status, adminRemark, approvedByAdmin, parseInt(id, 10)]
+    [status, adminRemark, approvedByAdmin, parseInt(id)]
   );
 
   const updatedLeave = result.rows[0];
@@ -1396,15 +1516,39 @@ export const ApproveLeaveAdminService = async (Request) => {
   if (adminStatus === 'Approved' && !wasAlreadyDeducted) {
     const year = new Date(leave.start_date).getFullYear();
     
-    // Update or insert leave balance
-    // Deduct the days from remaining balance on first approval
+    // Get default total_balance from leave_types if balance doesn't exist
+    const leaveTypeResult = await database.query(
+      `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+      [leave.leave_type]
+    );
+    
+    let defaultBalance = 0;
+    if (leaveTypeResult.rows.length > 0) {
+      const lt = leaveTypeResult.rows[0];
+      // Use max_days from database (fully dynamic)
+      defaultBalance = lt.max_days || 0;
+    }
+    
+    // First, ensure the balance record exists with correct total_balance
     await database.query(
-      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
-       VALUES ($1, $2, COALESCE((SELECT total_balance FROM leave_balance WHERE employee_id = $1 AND leave_type = $2 AND year = $3), 0), $4, $3)
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, remaining_balance, year)
+       VALUES ($1, $2, $5, 0, $5, $3)
        ON CONFLICT (employee_id, leave_type, year) 
        DO UPDATE SET 
-         used_balance = leave_balance.used_balance + $4,
+         total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
          updated_at = NOW()`,
+      [leave.employee_id, leave.leave_type, year, leave.number_of_days, defaultBalance]
+    );
+    
+    // Then update the used_balance and remaining_balance
+    await database.query(
+      `UPDATE leave_balance 
+       SET used_balance = used_balance + $4,
+           remaining_balance = GREATEST(0, total_balance - (used_balance + $4)),
+           updated_at = NOW()
+       WHERE employee_id = $1 
+       AND leave_type = $2 
+       AND year = $3`,
       [leave.employee_id, leave.leave_type, year, leave.number_of_days]
     );
     
@@ -1525,7 +1669,15 @@ export const ApproveLeaveAdminService = async (Request) => {
   }
 
   // If admin approved and HOD status is still pending, notify assigned HOD
-  if (status === 'Approved' && hodStatus === 'Pending') {
+  // BUT skip this if the leave was created by admin (admin leaves are auto-approved, no HOD notification needed)
+  // Check if leave was auto-approved by admin (both statuses were already Approved with Autoapproved remarks)
+  const leaveWasCreatedByAdmin = (leave.hod_status === 'Approved' && leave.admin_status === 'Approved' && 
+                                  leave.hod_remark === 'Autoapproved' && leave.admin_remark === 'Autoapproved') ||
+                                 (leave.hod_status === 'Approved' && leave.admin_status === 'Approved' && 
+                                  leave.hod_approved_at && leave.admin_approved_at && 
+                                  Math.abs(new Date(leave.hod_approved_at) - new Date(leave.admin_approved_at)) < 1000);
+  
+  if (status === 'Approved' && hodStatus === 'Pending' && !leaveWasCreatedByAdmin) {
     try {
       // Get employee's assigned HOD (manager_id)
       const empHodResult = await database.query(
@@ -1858,6 +2010,7 @@ export const CheckOverlappingLeavesService = async (Request) => {
 
 /**
  * Get Leave Balance
+ * Returns leave balance for the specified year, with default balances for years with no data
  */
 export const GetLeaveBalanceService = async (Request) => {
   const UserId = Request.UserId;
@@ -1879,7 +2032,8 @@ export const GetLeaveBalanceService = async (Request) => {
   // Get year from query params or use current year
   const year = parseInt(Request.query?.year) || new Date().getFullYear();
 
-  const result = await database.query(
+  // Get existing balances for the year
+  const existingBalances = await database.query(
     `SELECT leave_type, total_balance, used_balance, remaining_balance, year
      FROM leave_balance
      WHERE employee_id = $1 AND year = $2
@@ -1887,7 +2041,37 @@ export const GetLeaveBalanceService = async (Request) => {
     [empId, year]
   );
 
-  return result.rows;
+  // Get all active leave types
+  const leaveTypesResult = await database.query(
+    `SELECT name, code, max_days FROM leave_types WHERE is_active = true ORDER BY name`
+  );
+
+  // Create a map of existing balances by leave_type
+  const balanceMap = new Map();
+  existingBalances.rows.forEach(balance => {
+    balanceMap.set(balance.leave_type, balance);
+  });
+
+  // Build result array with defaults for missing leave types
+  const result = leaveTypesResult.rows.map(lt => {
+    if (balanceMap.has(lt.name)) {
+      // Return existing balance
+      return balanceMap.get(lt.name);
+    } else {
+      // Return default balance for this leave type (use max_days from database - fully dynamic)
+      const defaultBalance = lt.max_days || 0;
+
+      return {
+        leave_type: lt.name,
+        total_balance: defaultBalance,
+        used_balance: 0,
+        remaining_balance: defaultBalance,
+        year: year
+      };
+    }
+  });
+
+  return result;
 };
 
 /**

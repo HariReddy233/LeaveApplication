@@ -3,17 +3,28 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
-import { Shield, Clock, CheckCircle, XCircle, AlertCircle, CalendarDays } from 'lucide-react';
+import { CalendarDays, Lock } from 'lucide-react';
 
 export default function SettingsPage() {
   const router = useRouter();
   const currentYear = new Date().getFullYear();
-  const [authStats, setAuthStats] = useState<any>(null);
   const [leaveBalance, setLeaveBalance] = useState<any[]>([]);
   const [takenLeaves, setTakenLeaves] = useState<any[]>([]);
   const [selectedYear, setSelectedYear] = useState(currentYear);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string>('');
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
+
+  // Change Password State
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
 
   // Generate year options (current year and previous 2 years, next year)
   const yearOptions = [];
@@ -26,32 +37,26 @@ export default function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (userRole !== 'employee') {
-      fetchAuthStats();
-    }
     fetchLeaveBalance();
     fetchTakenLeaves();
   }, [selectedYear, userRole]);
 
   const fetchCurrentUser = async () => {
     try {
-      const response = await api.get('/Auth/Me');
-      if (response.data?.user) {
-        setUserRole(response.data.user.role?.toLowerCase() || 'employee');
+      const [userResponse, permissionsResponse] = await Promise.all([
+        api.get('/Auth/Me'),
+        api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
+      ]);
+      
+      if (userResponse.data?.user) {
+        setUserRole(userResponse.data.user.role?.toLowerCase() || 'employee');
+      }
+      
+      if (permissionsResponse.data?.data) {
+        setUserPermissions(permissionsResponse.data.data);
       }
     } catch (error) {
       console.error('Failed to fetch current user:', error);
-    }
-  };
-
-  const fetchAuthStats = async () => {
-    try {
-      const response = await api.get('/Authorization/AuthorizationStats');
-      if (response.data?.data) {
-        setAuthStats(response.data.data);
-      }
-    } catch (error: any) {
-      console.error('Failed to fetch authorization stats:', error);
     } finally {
       setLoading(false);
     }
@@ -100,83 +105,57 @@ export default function SettingsPage() {
     }
   };
 
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordError('');
+    setPasswordSuccess('');
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError('Please fill in all fields');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPasswordError('Password must be at least 6 characters');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New passwords do not match');
+      return;
+    }
+
+    if (currentPassword === newPassword) {
+      setPasswordError('New password must be different from current password');
+      return;
+    }
+
+    setPasswordLoading(true);
+    try {
+      // Use the existing Change Password endpoint (if it exists) or ResetPassword pattern
+      // Adjust the endpoint based on your existing API
+      const response = await api.post('/Auth/ChangePassword', {
+        current_password: currentPassword,
+        new_password: newPassword
+      });
+      
+      setPasswordSuccess(response.data?.message || 'Password changed successfully');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      
+      setTimeout(() => {
+        setPasswordSuccess('');
+      }, 3000);
+    } catch (err: any) {
+      setPasswordError(err.response?.data?.error || err.response?.data?.message || 'Failed to change password. Please try again.');
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-1" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-          Settings
-        </h1>
-        <p className="text-gray-600 text-sm" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-          Configure system settings
-        </p>
-      </div>
-
-      {/* Authorization Management Section - Only for Admin and HOD */}
-      {(userRole === 'admin' || userRole === 'hod') && (
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Shield className="w-5 h-5 text-blue-600" />
-          <h2 className="text-xl font-semibold text-gray-900">Authorization Management</h2>
-        </div>
-        
-        {loading ? (
-          <div className="text-gray-600 text-sm">Loading...</div>
-        ) : authStats ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="p-4 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-2 mb-2">
-                  <AlertCircle className="w-4 h-4 text-gray-600" />
-                  <h3 className="font-semibold text-gray-900 text-sm">Total Requests</h3>
-                </div>
-                <p className="text-2xl font-bold text-gray-900">{authStats.total_count || 0}</p>
-              </div>
-              <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <Clock className="w-4 h-4 text-yellow-600" />
-                  <h3 className="font-semibold text-gray-900 text-sm">Pending</h3>
-                </div>
-                <p className="text-2xl font-bold text-yellow-800">{authStats.pending_count || 0}</p>
-              </div>
-              <div className="p-4 bg-green-50 rounded-lg border border-green-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <CheckCircle className="w-4 h-4 text-green-600" />
-                  <h3 className="font-semibold text-gray-900 text-sm">Approved</h3>
-                </div>
-                <p className="text-2xl font-bold text-green-800">{authStats.approved_count || 0}</p>
-              </div>
-              <div className="p-4 bg-red-50 rounded-lg border border-red-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <XCircle className="w-4 h-4 text-red-600" />
-                  <h3 className="font-semibold text-gray-900 text-sm">Rejected</h3>
-                </div>
-                <p className="text-2xl font-bold text-red-800">{authStats.rejected_count || 0}</p>
-              </div>
-            </div>
-            
-            <div className="flex gap-3 mt-4">
-              <button
-                onClick={() => router.push('/dashboard/authorizations')}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
-              >
-                View My Authorizations
-              </button>
-              <button
-                onClick={() => router.push('/dashboard/apply-authorization')}
-                className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
-              >
-                Request New Authorization
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="p-4 bg-gray-50 rounded-lg">
-            <p className="text-sm text-gray-600">No authorization data available</p>
-          </div>
-        )}
-        </div>
-      )}
-
+    <div className="page-container space-y-6">
       <div className="bg-white rounded-lg border border-gray-200 p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold text-gray-900">Leave Balance & History</h2>
@@ -281,39 +260,136 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* Leave Management Settings - Only for Admin and HOD */}
-      {(userRole === 'admin' || userRole === 'hod') && (
+      {/* Change Password Section - Only if user has settings.edit permission or is Admin */}
+      {(userRole === 'admin' || userPermissions.includes('settings.edit')) && (
         <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">Leave Management Settings</h2>
-          <div className="space-y-4">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <h3 className="font-semibold text-gray-900 mb-2">Calendar Creation</h3>
-              <p className="text-sm text-gray-600">
-                Create and manage calendar templates that can be assigned to employees
-              </p>
+          <div className="flex items-center gap-2 mb-4">
+            <Lock className="w-5 h-5 text-gray-600" />
+            <h2 className="text-xl font-semibold text-gray-900">Change Password</h2>
+          </div>
+        
+        <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
+          {passwordError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-sm text-red-600">{passwordError}</p>
             </div>
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <h3 className="font-semibold text-gray-900 mb-2">Email Notifications</h3>
-              <p className="text-sm text-gray-600">
-                Configure email notifications for leave applications and approvals
-              </p>
+          )}
+          
+          {passwordSuccess && (
+            <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-sm text-green-600">{passwordSuccess}</p>
+            </div>
+          )}
+
+          <div>
+            <label htmlFor="currentPassword" className="block text-sm font-medium text-gray-700 mb-2">
+              Current Password
+            </label>
+            <div className="relative">
+              <input
+                id="currentPassword"
+                type={showCurrentPassword ? 'text' : 'password'}
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="form-input"
+                placeholder="Enter current password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showCurrentPassword ? (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                )}
+              </button>
             </div>
           </div>
+
+          <div>
+            <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700 mb-2">
+              New Password
+            </label>
+            <div className="relative">
+              <input
+                id="newPassword"
+                type={showNewPassword ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="form-input"
+                placeholder="Enter new password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowNewPassword(!showNewPassword)}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showNewPassword ? (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-2">
+              Confirm New Password
+            </label>
+            <div className="relative">
+              <input
+                id="confirmPassword"
+                type={showConfirmPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="form-input"
+                placeholder="Confirm new password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showConfirmPassword ? (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={passwordLoading}
+            className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {passwordLoading ? 'Changing Password...' : 'Change Password'}
+          </button>
+        </form>
         </div>
       )}
-
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">Shift Management Settings</h2>
-        <div className="p-4 bg-gray-50 rounded-lg">
-          <p className="text-sm text-gray-600">Shift management configuration will be available here</p>
-        </div>
-      </div>
     </div>
   );
 }
-
-
-
-
-
-

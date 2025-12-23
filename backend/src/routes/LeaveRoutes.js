@@ -5,6 +5,7 @@ const LeaveRoutes = express.Router();
 //Internal Lib Import
 import LeaveControllers from "../controller/Leave/LeaveControllers.js";
 import { CheckEmployeeAuth, CheckAdminAuth, CheckHodAuth } from "../middleware/CheckAuthLogin.js";
+import { CheckPermission, CheckMultiplePermissions } from "../middleware/CheckPermission.js";
 
 //Leave Create
 LeaveRoutes.post(
@@ -13,26 +14,29 @@ LeaveRoutes.post(
   LeaveControllers.LeaveCreate,
 );
 
-//LeaveList (Employee's own leaves with pagination)
+//LeaveList (Employee's own leaves with pagination) - Requires leave.view_own, leave.view_all, leave.apply, OR leave.create (users who can apply leave need to see their own leaves for blocked dates)
 LeaveRoutes.get(
   "/LeaveList/:pageNumber/:perPage/:searchKeyword",
   CheckEmployeeAuth,
+  CheckMultiplePermissions(['leave.view_own', 'leave.view_all', 'leave.apply', 'leave.create'], 'any'),
   LeaveControllers.LeaveList,
 );
 
-//LeaveAdminList (All leaves for Admin with pagination)
+//LeaveAdminList (All leaves for Admin with pagination) - Requires leave.view_own or leave.view_all
 LeaveRoutes.get(
   "/LeaveAdminList/:pageNumber/:perPage/:searchKeyword",
   CheckEmployeeAuth,
   CheckAdminAuth,
+  CheckMultiplePermissions(['leave.view_own', 'leave.view_all'], 'any'),
   LeaveControllers.LeaveAdminList,
 );
 
-//LeaveListHod (All leaves for HOD with pagination)
+//LeaveListHod (All leaves for HOD with pagination) - Requires leave.view_own or leave.view_all
 LeaveRoutes.get(
   "/LeaveListHod/:pageNumber/:perPage/:searchKeyword",
   CheckEmployeeAuth,
   CheckHodAuth,
+  CheckMultiplePermissions(['leave.view_own', 'leave.view_all'], 'any'),
   LeaveControllers.LeaveListHod,
 );
 
@@ -73,19 +77,21 @@ LeaveRoutes.delete(
   LeaveControllers.LeaveDelete,
 );
 
-//Leave Approve/Reject
+//Leave Approve/Reject (Admin) - Requires leave.approve or leave.reject
 LeaveRoutes.patch(
   "/LeaveApprove/:id",
   CheckEmployeeAuth,
   CheckAdminAuth,
+  CheckMultiplePermissions(['leave.approve', 'leave.reject'], 'any'),
   LeaveControllers.LeaveApprove,
 );
 
-//Leave Approve/Reject (HOD)
+//Leave Approve/Reject (HOD) - Requires leave.approve or leave.reject
 LeaveRoutes.patch(
   "/LeaveApproveHod/:id",
   CheckEmployeeAuth,
   CheckHodAuth,
+  CheckMultiplePermissions(['leave.approve', 'leave.reject'], 'any'),
   LeaveControllers.LeaveApproveHod,
 );
 
@@ -103,30 +109,29 @@ LeaveRoutes.post(
   LeaveControllers.CheckOverlappingLeaves,
 );
 
-//Bulk Approve/Reject (Admin)
+//Bulk Approve/Reject (Admin) - Requires leave.approve or leave.reject
 LeaveRoutes.post(
   "/BulkApprove",
   CheckEmployeeAuth,
   CheckAdminAuth,
+  CheckMultiplePermissions(['leave.approve', 'leave.reject'], 'any'),
   LeaveControllers.BulkApprove,
 );
 
-//Bulk Approve/Reject (HOD)
+//Bulk Approve/Reject (HOD) - Requires leave.approve or leave.reject
 LeaveRoutes.post(
   "/BulkApproveHod",
   CheckEmployeeAuth,
   CheckHodAuth,
+  CheckMultiplePermissions(['leave.approve', 'leave.reject'], 'any'),
   LeaveControllers.BulkApproveHod,
 );
 
 //Email-based Approval/Rejection (Public - no auth required, token-based)
+// Single endpoint: /email-action?token=xxx&action=approve or /email-action?token=xxx&action=reject
+// One token per leave request, works for both approve and reject (action from query parameter)
 LeaveRoutes.get(
-  "/email-approve",
-  LeaveControllers.EmailApprove,
-);
-
-LeaveRoutes.get(
-  "/email-reject",
+  "/email-action",
   LeaveControllers.EmailApprove,
 );
 

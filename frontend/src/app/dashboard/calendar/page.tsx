@@ -206,19 +206,19 @@ export default function CalendarPage() {
 
   // Main calendar view
   return (
-    <div className="space-y-3">
-      {/* Compact Filters - Reduced Height */}
-      <div className="bg-white rounded-lg border border-gray-200 p-3 mb-3">
+    <div className="page-container space-y-6">
+      {/* Compact Filters */}
+      <div className="card p-4">
         <div className="flex items-center gap-4">
-          <div className="flex-1 max-w-xs">
-            <label htmlFor="employee-filter" className="block text-xs font-medium text-gray-700 mb-1">
-              Employee
+          <div className="w-full max-w-xs">
+            <label htmlFor="employee-filter" className="form-label text-sm mb-2">
+              Filter by Employee
             </label>
             <select
               id="employee-filter"
               value={filters.employee_id}
               onChange={(e) => setFilters({ ...filters, employee_id: e.target.value })}
-              className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white"
+              className="form-input"
             >
               <option value="">All Employees</option>
               {employees.map((emp) => {
@@ -235,14 +235,14 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      {/* Calendar Grid - Outlook Style */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        {/* Month Navigation - Improved */}
-        <div className="flex items-center justify-between mb-3">
+      {/* Calendar Grid - Zoho Style */}
+      <div className="card p-4">
+        {/* Month Navigation - Zoho Style */}
+        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <button
               onClick={() => navigateMonth('prev')}
-              className="p-1.5 hover:bg-gray-100 rounded transition-colors"
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               aria-label="Previous month"
               title="Previous month"
             >
@@ -250,23 +250,32 @@ export default function CalendarPage() {
             </button>
             <button
               onClick={() => navigateMonth('next')}
-              className="p-1.5 hover:bg-gray-100 rounded transition-colors"
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
               aria-label="Next month"
               title="Next month"
             >
               <ChevronRight className="w-5 h-5 text-gray-600" />
             </button>
+            <button
+              onClick={goToToday}
+              className="px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors ml-2"
+            >
+              Today
+            </button>
           </div>
           
           {/* Month Selector Dropdown */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <h2 className="text-xl font-semibold text-gray-900">
+              {monthNames[currentMonth]} {currentYear}
+            </h2>
             <select
               value={`${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`}
               onChange={(e) => {
                 const [year, month] = e.target.value.split('-');
                 setCurrentDate(new Date(parseInt(year), parseInt(month) - 1, 1));
               }}
-              className="px-3 py-1.5 text-sm font-semibold text-gray-900 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white cursor-pointer"
+              className="form-input w-auto min-w-[180px]"
             >
               {Array.from({ length: 24 }, (_, i) => {
                 const date = new Date();
@@ -281,96 +290,109 @@ export default function CalendarPage() {
               })}
             </select>
           </div>
-          
-          <div className="w-24"></div> {/* Spacer for centering */}
         </div>
 
-        {/* Calendar Grid */}
-        <div className="grid grid-cols-7 gap-px bg-gray-200 border border-gray-200 rounded-lg overflow-hidden">
-          {/* Day Headers */}
-          {dayNames.map(day => (
-            <div key={day} className="bg-gray-50 p-2 text-center text-xs font-semibold text-gray-700">
-              {day}
-            </div>
-          ))}
+        {/* Calendar Grid - Zoho Style */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <div className="grid grid-cols-7 bg-gray-50 border-b border-gray-200">
+            {/* Day Headers */}
+            {dayNames.map(day => (
+              <div key={day} className="p-2.5 text-center text-sm font-semibold text-gray-700 border-r border-gray-200 last:border-r-0">
+                {day}
+              </div>
+            ))}
+          </div>
           
           {/* Calendar Days */}
-          {calendarWithLeaves.map((day, index) => {
-            const isToday = day.date.toDateString() === new Date().toDateString();
-            const uniqueLeaves = day.leaves.filter((leave, idx, self) => 
-              idx === self.findIndex(l => l.id === leave.id)
-            );
-            
-            return (
-              <div
-                key={index}
-                className={`relative min-h-[80px] bg-white p-1.5 ${
-                  !day.isCurrentMonth ? 'bg-gray-50' : ''
-                } ${isToday ? 'bg-blue-100 border-2 border-blue-300' : ''}`}
-              >
-                <div className={`text-xs font-medium mb-1 ${
-                  !day.isCurrentMonth ? 'text-gray-400' : isToday ? 'text-blue-700 font-bold' : 'text-gray-700'
-                }`}>
-                  {day.date.getDate()}
-                </div>
-                <div className="space-y-0.5">
-                  {uniqueLeaves.slice(0, 3).map((leave) => {
-                    const startDate = new Date(leave.start_date);
-                    const endDate = new Date(leave.end_date);
-                    const isStart = day.date.toDateString() === startDate.toDateString();
-                    const isEnd = day.date.toDateString() === endDate.toDateString();
-                    const isRange = !isStart && !isEnd;
-                    
-                    // Format dates for tooltip
-                    const fromDate = startDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-                    const toDate = endDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-                    const daysCount = leave.number_of_days || Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-                    const tooltipText = `${leave.full_name || leave.email || 'Unknown'}\nLeave Type: ${leave.leave_type || 'N/A'}\nFrom: ${fromDate}\nTo: ${toDate}\nDuration: ${daysCount} day${daysCount !== 1 ? 's' : ''}${leave.reason ? `\nReason: ${leave.reason}` : ''}`;
-                    
-                    return (
-                      <div
-                        key={leave.id}
-                        className={`text-xs px-1.5 py-0.5 rounded truncate cursor-help ${
-                          isStart || isEnd
-                            ? 'bg-blue-500 text-white font-medium'
-                            : isRange
-                            ? 'bg-blue-200 text-blue-800'
-                            : 'bg-blue-100 text-blue-700'
-                        }`}
-                        title={tooltipText}
+          <div className="grid grid-cols-7">
+            {calendarWithLeaves.map((day, index) => {
+              const isToday = day.date.toDateString() === new Date().toDateString();
+              const uniqueLeaves = day.leaves.filter((leave, idx, self) => 
+                idx === self.findIndex(l => l.id === leave.id)
+              );
+              
+              return (
+                <div
+                  key={index}
+                  className={`relative min-h-[90px] p-1.5 border-r border-b border-gray-200 last:border-r-0 ${
+                    !day.isCurrentMonth ? 'bg-gray-50' : 'bg-white'
+                  } ${isToday ? 'bg-blue-50' : ''} hover:bg-gray-50 transition-colors`}
+                >
+                  <div className={`text-sm font-medium mb-1.5 ${
+                    !day.isCurrentMonth ? 'text-gray-400' : isToday ? 'text-blue-600 font-bold' : 'text-gray-900'
+                  }`}>
+                    {day.date.getDate()}
+                    {isToday && (
+                      <span className="ml-1.5 w-1.5 h-1.5 bg-blue-600 rounded-full inline-block"></span>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {uniqueLeaves.slice(0, 2).map((leave) => {
+                      const startDate = new Date(leave.start_date);
+                      const endDate = new Date(leave.end_date);
+                      const isStart = day.date.toDateString() === startDate.toDateString();
+                      const isEnd = day.date.toDateString() === endDate.toDateString();
+                      const isRange = !isStart && !isEnd;
+                      const employeeName = (leave.full_name || leave.email || 'Unknown').split(' ')[0];
+                      
+                      // Format dates for tooltip
+                      const fromDate = startDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                      const toDate = endDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                      const daysCount = leave.number_of_days || Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                      const tooltipText = `${leave.full_name || leave.email || 'Unknown'}\nLeave Type: ${leave.leave_type || 'N/A'}\nFrom: ${fromDate}\nTo: ${toDate}\nDuration: ${daysCount} day${daysCount !== 1 ? 's' : ''}${leave.reason ? `\nReason: ${leave.reason}` : ''}`;
+                      
+                      return (
+                        <div
+                          key={leave.id}
+                          className={`text-xs px-2 py-1 rounded cursor-pointer transition-all hover:shadow-sm truncate ${
+                            isStart || isEnd
+                              ? 'bg-blue-600 text-white font-medium'
+                              : isRange
+                              ? 'bg-blue-100 text-blue-800 border-l-2 border-blue-600'
+                              : 'bg-blue-50 text-blue-700'
+                          }`}
+                          title={tooltipText}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDate(day.date);
+                            setSelectedDateLeaves(uniqueLeaves);
+                            setShowModal(true);
+                          }}
+                        >
+                          {employeeName}
+                        </div>
+                      );
+                    })}
+                    {uniqueLeaves.length > 2 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedDate(day.date);
+                          setSelectedDateLeaves(uniqueLeaves);
+                          setShowModal(true);
+                        }}
+                        className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1 font-medium cursor-pointer hover:underline w-full text-left"
                       >
-                        {(leave.full_name || leave.email || 'Unknown').split(' ')[0]}
-                      </div>
-                    );
-                  })}
-                  {uniqueLeaves.length > 3 && (
+                        +{uniqueLeaves.length - 2} more
+                      </button>
+                    )}
+                  </div>
+                  {/* Clickable date cell for modal */}
+                  {uniqueLeaves.length > 0 && (
                     <button
                       onClick={() => {
                         setSelectedDate(day.date);
                         setSelectedDateLeaves(uniqueLeaves);
                         setShowModal(true);
                       }}
-                      className="text-xs text-blue-600 hover:text-blue-800 px-1.5 font-medium cursor-pointer hover:underline"
-                    >
-                      +{uniqueLeaves.length - 3} more
-                    </button>
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                      aria-label={`View ${uniqueLeaves.length} leave(s) on ${day.date.toLocaleDateString()}`}
+                    />
                   )}
                 </div>
-                {/* Clickable date cell for modal */}
-                {uniqueLeaves.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setSelectedDate(day.date);
-                      setSelectedDateLeaves(uniqueLeaves);
-                      setShowModal(true);
-                    }}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                    aria-label={`View ${uniqueLeaves.length} leave(s) on ${day.date.toLocaleDateString()}`}
-                  />
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -401,9 +423,9 @@ export default function CalendarPage() {
             style={{ maxWidth: '42rem', width: '100%' }}
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
               <div>
-                <h2 className="text-xl font-semibold text-gray-900">
+                <h2 className="text-lg font-semibold text-gray-900">
                   Leaves on {selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                 </h2>
                 <p className="text-sm text-gray-600 mt-1">
@@ -424,8 +446,8 @@ export default function CalendarPage() {
             </div>
 
             {/* Modal Body */}
-            <div className="flex-1 overflow-y-auto p-4">
-              <div className="space-y-3">
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="space-y-4">
                 {selectedDateLeaves.map((leave) => {
                   const startDate = new Date(leave.start_date);
                   const endDate = new Date(leave.end_date);
@@ -464,21 +486,21 @@ export default function CalendarPage() {
                   }
 
                   return (
-                    <div key={leave.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
-                      <div className="flex items-start justify-between mb-2">
+                    <div key={leave.id} className="card p-5 hover:shadow-md transition-all">
+                      <div className="flex items-start justify-between mb-3">
                         <div>
-                          <h3 className="font-semibold text-gray-900">{leave.full_name || leave.email || 'Unknown'}</h3>
+                          <h3 className="text-base font-semibold text-gray-900 mb-1">{leave.full_name || leave.email || 'Unknown'}</h3>
                           <p className="text-sm text-gray-600">{leave.email}</p>
                         </div>
-                        <span className={`px-2 py-1 text-xs font-medium rounded ${
+                        <span className={`badge ${
                           status === 'Fully Approved' 
-                            ? 'bg-green-100 text-green-800' 
-                            : 'bg-blue-100 text-blue-800'
+                            ? 'badge-approved' 
+                            : 'badge-pending'
                         }`}>
                           {status}
                         </span>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-sm">
+                      <div className="grid grid-cols-2 gap-3 text-sm mb-3">
                         <div>
                           <span className="text-gray-600">Leave Type:</span>
                           <span className="ml-2 font-medium text-gray-900">{leave.leave_type || 'N/A'}</span>
@@ -497,9 +519,9 @@ export default function CalendarPage() {
                         </div>
                       </div>
                       {leave.reason && (
-                        <div className="mt-2 pt-2 border-t border-gray-200">
-                          <span className="text-gray-600 text-sm">Reason:</span>
-                          <p className="text-sm text-gray-900 mt-1">{leave.reason}</p>
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <span className="text-gray-600 text-sm font-medium">Reason:</span>
+                          <p className="text-sm text-gray-900 mt-1.5">{leave.reason}</p>
                         </div>
                       )}
                     </div>

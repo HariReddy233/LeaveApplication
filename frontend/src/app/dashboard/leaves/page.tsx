@@ -23,6 +23,7 @@ export default function MyLeavesPage() {
   const [allLeaves, setAllLeaves] = useState<any[]>([]);
   const [totalLeave, setTotalLeave] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [permissions, setPermissions] = useState<string[]>([]);
 
   // Generate year options (current year and previous 2 years, next year)
   const yearOptions = [];
@@ -31,8 +32,50 @@ export default function MyLeavesPage() {
   }
 
   useEffect(() => {
-    fetchLeaves();
-  }, [pageNumber, perPage, selectedYear]);
+    checkPermissions();
+  }, []);
+
+  useEffect(() => {
+    if (permissions.length > 0) {
+      fetchLeaves();
+    }
+  }, [pageNumber, perPage, selectedYear, permissions]);
+
+  const checkPermissions = async () => {
+    try {
+      const [userResponse, permissionsResponse] = await Promise.all([
+        api.get('/Auth/Me').catch(() => ({ data: { user: { role: 'employee' } } })),
+        api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
+      ]);
+      
+      const userRole = userResponse.data?.user?.role?.toLowerCase() || 'employee';
+      const userPermissions = permissionsResponse.data?.data || [];
+      
+      // Check if user has leave.view_own or leave.view_all permission
+      const hasViewOwn = userPermissions.includes('leave.view_own');
+      const hasViewAll = userPermissions.includes('leave.view_all');
+      
+      // Admin bypass (if needed, but should still check permissions)
+      if (userRole === 'admin') {
+        // Admin can access, but still check permissions for consistency
+        if (!hasViewOwn && !hasViewAll) {
+          router.push('/dashboard');
+          return;
+        }
+      } else {
+        // HOD and Employee must have permission
+        if (!hasViewOwn && !hasViewAll) {
+          router.push('/dashboard');
+          return;
+        }
+      }
+      
+      setPermissions(userPermissions);
+    } catch (error) {
+      console.error('Failed to check permissions:', error);
+      router.push('/dashboard');
+    }
+  };
 
   // Filter leaves by status when status changes
   useEffect(() => {

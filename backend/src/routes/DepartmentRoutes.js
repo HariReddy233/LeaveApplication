@@ -4,28 +4,31 @@ const DepartmentRoutes = express.Router();
 
 //Internal Lib Import
 import DepartmentControllers from "../controller/Department/DepartmentControllers.js";
-import { CheckEmployeeAuth, CheckAdminAuth } from "../middleware/CheckAuthLogin.js";
+import { CheckEmployeeAuth } from "../middleware/CheckAuthLogin.js";
+import { CheckPermission } from "../middleware/CheckPermission.js";
 
 //Get Department List
 DepartmentRoutes.get(
   "/DepartmentList",
   CheckEmployeeAuth,
+  CheckPermission('department.view'),
   DepartmentControllers.DepartmentList,
 );
 
-//Create Department (Admin only)
+//Create Department (Permission-based: department.create)
 DepartmentRoutes.post(
   "/DepartmentCreate",
   CheckEmployeeAuth,
-  CheckAdminAuth,
+  CheckPermission('department.create'),
   DepartmentControllers.DepartmentCreate,
 );
 
-//Delete Department (Admin only)
+
+//Delete Department (Permission-based: department.delete)
 DepartmentRoutes.delete(
   "/DepartmentDelete/:id",
   CheckEmployeeAuth,
-  CheckAdminAuth,
+  CheckPermission('department.delete'),
   DepartmentControllers.DepartmentDelete,
 );
 

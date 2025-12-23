@@ -9,10 +9,15 @@ import { ApproveLeaveHodService, ApproveLeaveAdminService } from "./LeaveService
  * Handles approval/rejection from email links
  */
 export const EmailApprovalService = async (Request) => {
-  const { token } = Request.query;
+  const { token, action } = Request.query;
   
   if (!token) {
     throw CreateError("Approval token is required", 400);
+  }
+  
+  // Validate action parameter
+  if (!action || !['approve', 'reject'].includes(action.toLowerCase())) {
+    throw CreateError("Action parameter is required and must be 'approve' or 'reject'", 400);
   }
   
   // Verify and use the token (one-time use)
@@ -74,9 +79,10 @@ export const EmailApprovalService = async (Request) => {
     throw CreateError("You are not authorized to approve this leave request", 403);
   }
   
-  // Determine action based on token
-  const status = tokenRecord.action_type === 'approve' ? 'Approved' : 'Rejected';
-  const comment = tokenRecord.action_type === 'approve' 
+  // Determine action based on query parameter (not token)
+  const actionLower = action.toLowerCase();
+  const status = actionLower === 'approve' ? 'Approved' : 'Rejected';
+  const comment = actionLower === 'approve' 
     ? 'Approved via email' 
     : 'Rejected via email';
   

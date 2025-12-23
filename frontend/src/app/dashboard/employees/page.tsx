@@ -13,6 +13,7 @@ export default function EmployeesPage() {
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string>('');
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
   useEffect(() => {
     fetchUserRole();
@@ -21,9 +22,15 @@ export default function EmployeesPage() {
 
   const fetchUserRole = async () => {
     try {
-      const response = await api.get('/Auth/Me');
-      if (response.data?.user?.role) {
-        setUserRole(response.data.user.role.toLowerCase());
+      const [userResponse, permissionsResponse] = await Promise.all([
+        api.get('/Auth/Me'),
+        api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
+      ]);
+      if (userResponse.data?.user?.role) {
+        setUserRole(userResponse.data.user.role.toLowerCase());
+      }
+      if (permissionsResponse.data?.data) {
+        setUserPermissions(permissionsResponse.data.data);
       }
     } catch (err) {
       console.error('Failed to fetch user role:', err);
@@ -88,12 +95,17 @@ export default function EmployeesPage() {
       
       if (err.code === 'ECONNABORTED') {
         alert('Request timed out. The server might be slow. Please try again.');
-      } else if (err.response?.status === 401 || err.response?.status === 403) {
+      } else if (err.response?.status === 401) {
+        // 401 = Authentication failed - redirect to login
         alert('Session expired. Please login again.');
         if (typeof window !== 'undefined') {
           localStorage.removeItem('auth_token');
           window.location.href = '/login';
         }
+      } else if (err.response?.status === 403) {
+        // 403 = Permission denied - show error but don't redirect
+        const errorMsg = err.response?.data?.message || 'You do not have permission to view employees. Please contact your administrator.';
+        alert(`Access denied: ${errorMsg}`);
       } else {
         // Show error to user
         const errorMsg = err.response?.data?.message || err.response?.data?.error || err.message || 'Unknown error';
@@ -130,7 +142,7 @@ export default function EmployeesPage() {
   }
 
   return (
-    <>
+    <div className="page-container">
       <PageTitle
         breadCrumbItems={[
           { label: 'Dashboard', path: '/dashboard' },
@@ -139,83 +151,84 @@ export default function EmployeesPage() {
         title="Employee List"
       />
 
-      <div className="space-y-6">
+      <div className="space-y-6 mt-6">
 
       {/* Employees list */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="card overflow-hidden">
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900">
+          <h2 className="text-lg font-semibold text-gray-900">
             Employees ({employees.length})
           </h2>
-          <Link
-            href="/dashboard/employees/create"
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors text-sm"
-            style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
-          >
-            + Add Employee
-          </Link>
+          {(userRole === 'admin' || userPermissions.includes('employee.create')) && (
+            <Link
+              href="/dashboard/employees/create"
+              className="bg-[#2563EB] text-white px-4 py-2.5 rounded-lg font-medium hover:bg-[#1D4ED8] transition-all text-sm shadow-sm hover:shadow-md"
+            >
+              + Add Employee
+            </Link>
+          )}
         </div>
         <div className="p-6">
           {employees.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="table-wrapper">
+              <table className="table">
                 <thead>
-                  <tr className="text-left text-gray-600 text-sm font-medium border-b">
-                    <th className="pb-3">Name</th>
-                    <th className="pb-3">Email</th>
-                    <th className="pb-3">Location</th>
-                    <th className="pb-3">Department</th>
-                    <th className="pb-3">Role</th>
-                    <th className="pb-3">Assigned HOD</th>
-                    <th className="pb-3">Assigned Admin</th>
-                    <th className="pb-3">Actions</th>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Location</th>
+                    <th>Department</th>
+                    <th>Role</th>
+                    <th>Assigned HOD</th>
+                    <th>Assigned Admin</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {employees.map((employee) => (
-                    <tr key={employee.employee_id || employee.id} className="border-b hover:bg-gray-50">
-                      <td className="py-3 text-gray-900">{employee.full_name}</td>
-                      <td className="py-3 text-gray-700">{employee.email}</td>
-                      <td className="py-3 text-gray-700">{employee.location || '-'}</td>
-                      <td className="py-3 text-gray-700">{employee.team || employee.department || '-'}</td>
-                      <td className="py-3">
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                    <tr key={employee.employee_id || employee.id}>
+                      <td className="font-medium text-gray-900">{employee.full_name}</td>
+                      <td className="text-gray-700">{employee.email}</td>
+                      <td className="text-gray-700">{employee.location || '-'}</td>
+                      <td className="text-gray-700">{employee.team || employee.department || '-'}</td>
+                      <td>
+                        <span className="badge bg-blue-100 text-blue-800">
                           {employee.role || 'employee'}
                         </span>
                       </td>
-                      <td className="py-3 text-gray-700">
+                      <td className="text-gray-700">
                         {employee.hod_name ? (
                           <div>
-                            <div className="font-medium">{employee.hod_name}</div>
-                            <div className="text-xs text-gray-500">{employee.hod_email}</div>
+                            <div className="font-medium text-gray-900">{employee.hod_name}</div>
+                            <div className="text-xs text-gray-500 mt-0.5">{employee.hod_email}</div>
                           </div>
                         ) : (
                           <span className="text-gray-400">-</span>
                         )}
                       </td>
-                      <td className="py-3 text-gray-700">
+                      <td className="text-gray-700">
                         {employee.admin_name ? (
                           <div>
-                            <div className="font-medium">{employee.admin_name}</div>
-                            <div className="text-xs text-gray-500">{employee.admin_email}</div>
+                            <div className="font-medium text-gray-900">{employee.admin_name}</div>
+                            <div className="text-xs text-gray-500 mt-0.5">{employee.admin_email}</div>
                           </div>
                         ) : (
                           <span className="text-gray-400">-</span>
                         )}
                       </td>
-                      <td className="py-3">
+                      <td>
                         <div className="flex items-center gap-3">
                           <Link
                             href={`/dashboard/employees/edit/${employee.user_id || employee.id}`}
-                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                            className="text-blue-600 hover:text-blue-800 text-sm font-medium transition-colors"
                           >
                             Edit
                           </Link>
                           {/* Delete button - Admin only */}
-                          {userRole === 'admin' && (
+                          {(userRole === 'admin' || userPermissions.includes('employee.delete')) && (
                             <button
                               onClick={() => handleDeleteEmployee(employee.user_id || employee.id, employee.full_name || employee.email)}
-                              className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                              className="text-red-600 hover:text-red-800 p-1.5 rounded hover:bg-red-50 transition-colors"
                               title="Delete Employee"
                               aria-label="Delete employee"
                             >
@@ -230,12 +243,15 @@ export default function EmployeesPage() {
               </table>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">No employees found</div>
+            <div className="text-center py-12">
+              <Users className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500 text-sm">No employees found</p>
+            </div>
           )}
         </div>
       </div>
       </div>
-    </>
+    </div>
   );
 }
 

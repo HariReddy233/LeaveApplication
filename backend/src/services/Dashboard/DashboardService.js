@@ -90,12 +90,13 @@ export const DashboardSummaryAdminService = async (Request) => {
   const total = parseInt(totalResult.rows[0].count);
 
   // Group by AdminStatus (all leaves, not filtered by HOD status)
+  // Handle NULL values by treating them as 'Pending'
   const statusResult = await database.query(
     `SELECT 
-      admin_status as _id,
+      COALESCE(admin_status, 'Pending') as _id,
       COUNT(*) as count
     FROM leave_applications
-    GROUP BY admin_status`
+    GROUP BY COALESCE(admin_status, 'Pending')`
   );
 
   return {

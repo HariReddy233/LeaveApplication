@@ -21,12 +21,37 @@ export default function EditLeaveTypePage() {
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
   const [error, setError] = useState('');
+  const [userRole, setUserRole] = useState<string>('');
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
   useEffect(() => {
+    fetchUserRole();
     if (id) {
       fetchLeaveType();
     }
   }, [id]);
+
+  const fetchUserRole = async () => {
+    try {
+      const [userResponse, permissionsResponse] = await Promise.all([
+        api.get('/Auth/Me'),
+        api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
+      ]);
+      if (userResponse.data?.user?.role) {
+        setUserRole(userResponse.data.user.role.toLowerCase());
+      }
+      if (permissionsResponse.data?.data) {
+        setUserPermissions(permissionsResponse.data.data);
+        // Check if user has leavetype.edit permission or is admin
+        const hasPermission = permissionsResponse.data.data.includes('leavetype.edit');
+        if (!hasPermission && userResponse.data?.user?.role?.toLowerCase() !== 'admin') {
+          router.push('/dashboard/leave-types');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch user role:', err);
+    }
+  };
 
   const fetchLeaveType = async () => {
     try {
@@ -74,7 +99,18 @@ export default function EditLeaveTypePage() {
       router.push('/dashboard/leave-types?refresh=true');
     } catch (err: any) {
       console.error('Leave type update error:', err);
-      setError(err.response?.data?.error || err.response?.data?.message || 'Failed to update leave type');
+      if (err.response?.status === 401) {
+        // 401 = Authentication failed - redirect to login
+        setError('Session expired. Please login again.');
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 2000);
+      } else if (err.response?.status === 403) {
+        // 403 = Permission denied - show error but don't redirect
+        setError(err.response?.data?.message || 'You do not have permission to edit leave types. Please contact your administrator.');
+      } else {
+        setError(err.response?.data?.error || err.response?.data?.message || 'Failed to update leave type');
+      }
     } finally {
       setLoading(false);
     }
@@ -221,7 +257,7 @@ export default function EditLeaveTypePage() {
           </form>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

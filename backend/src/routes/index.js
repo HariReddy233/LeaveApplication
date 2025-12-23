@@ -8,10 +8,10 @@ import LeaveRoutes from "./LeaveRoutes.js";
 import CalendarRoutes from "./CalendarRoutes.js";
 import DashboardRoutes from "./DashboardRoutes.js";
 import UserRoutes from "./UserRoutes.js";
-import AuthorizationRoutes from "./AuthorizationRoutes.js";
 import LeaveTypeRoutes from "./LeaveTypeRoutes.js";
 import DepartmentRoutes from "./DepartmentRoutes.js";
 import SSERoutes from "./SSERoutes.js";
+import PermissionRoutes from "./PermissionRoutes.js";
 
 //Auth Routes
 routes.use("/Auth", AuthRoutes);
@@ -28,9 +28,6 @@ routes.use("/Dashboard", DashboardRoutes);
 //User Routes
 routes.use("/User", UserRoutes);
 
-//Authorization Routes
-routes.use("/Authorization", AuthorizationRoutes);
-
 //LeaveType Routes
 routes.use("/LeaveType", LeaveTypeRoutes);
 
@@ -39,6 +36,9 @@ routes.use("/Department", DepartmentRoutes);
 
 //SSE Routes
 routes.use("/SSE", SSERoutes);
+
+//Permission Routes
+routes.use("/Permission", PermissionRoutes);
 
 export default routes;
 

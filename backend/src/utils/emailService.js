@@ -46,8 +46,7 @@ export const sendLeaveApplicationEmail = async ({
   reason,
   hod_status = null,
   hod_name = null,
-  approveToken = null,
-  rejectToken = null,
+  approvalToken = null,
   baseUrl = null
 }) => {
   try {
@@ -273,20 +272,20 @@ export const sendLeaveApplicationEmail = async ({
                 ` : ''}
               </div>
               
-              ${approveToken && rejectToken ? `
+              ${approvalToken ? `
               <div class="action-buttons" style="margin: 24px 0; text-align: center;">
-                <a href="${baseUrl || 'http://localhost:3000'}/api/leave/email-approve?token=${approveToken}" 
+                <a href="${baseUrl || 'http://localhost:3000'}/api/Leave/email-action?token=${approvalToken}&action=approve" 
                    style="display: inline-block; background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
                   ✅ Approve
                 </a>
-                <a href="${baseUrl || 'http://localhost:3000'}/api/leave/email-reject?token=${rejectToken}" 
+                <a href="${baseUrl || 'http://localhost:3000'}/api/Leave/email-action?token=${approvalToken}&action=reject" 
                    style="display: inline-block; background-color: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
                   ❌ Reject
                 </a>
               </div>
               <div class="action-note" style="background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; padding: 12px; margin: 16px 0; text-align: center;">
                 <p class="action-note-text" style="color: #92400e; font-size: 12px; font-weight: 500;">
-                  ⚡ You can approve or reject this leave request directly from this email, or log in to the Leave Management Portal for more details.
+                  ⚡ You can approve or reject this leave request directly from this email. This link can only be used once. You can also log in to the Leave Management Portal for more details.
                 </p>
               </div>
               ` : `

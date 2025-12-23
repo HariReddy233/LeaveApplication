@@ -39,12 +39,17 @@ api.interceptors.response.use(
         return Promise.reject(error);
       }
       
+      // Don't redirect if we're already on login page or if it's a login request
+      if (currentPath === '/login' || currentPath.startsWith('/login') || url.includes('/Auth/LoginUser')) {
+        return Promise.reject(error);
+      }
+      
       // Token expired or invalid - clear it and redirect
       if (typeof window !== 'undefined') {
         localStorage.removeItem('auth_token');
         // Only redirect if we're not already on the login page
-        if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
+        if (window.location.pathname !== '/login' && !window.location.pathname.startsWith('/login')) {
+          window.location.href = '/login';
         }
       }
     }

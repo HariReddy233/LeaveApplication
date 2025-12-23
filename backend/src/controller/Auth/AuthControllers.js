@@ -2,6 +2,7 @@
 import RegistrationService from "../../services/Auth/RegistrationService.js";
 import LoginService from "../../services/Auth/LoginService.js";
 import { RequestPasswordResetService, ResetPasswordService } from "../../services/Auth/ForgotPasswordService.js";
+import { ChangePasswordService } from "../../services/Auth/ChangePasswordService.js";
 import database from "../../config/database.js";
 import DecodedToken from "../../utility/DecodedToken.js";
 
@@ -158,11 +159,27 @@ export const ResetPassword = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Change Password (for logged-in users)
+ * @access private
+ * @route /api/v1/Auth/ChangePassword
+ * @method POST
+ */
+export const ChangePassword = async (req, res, next) => {
+  try {
+    const result = await ChangePasswordService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   LoginUser,
   RegisterUser,
   GetCurrentUser,
   ForgotPassword,
   ResetPassword,
+  ChangePassword,
 };
 

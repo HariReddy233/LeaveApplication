@@ -4,21 +4,22 @@ const UserRoutes = express.Router();
 
 //Internal Lib Import
 import UserControllers from "../controller/User/UserControllers.js";
-import { CheckEmployeeAuth, CheckAdminAuth, CheckHodAuth } from "../middleware/CheckAuthLogin.js";
+import { CheckEmployeeAuth, CheckAdminAuth } from "../middleware/CheckAuthLogin.js";
+import { CheckPermission } from "../middleware/CheckPermission.js";
 
-//Employee List
+//Employee List (Permission-based: employee.view)
 UserRoutes.get(
   "/EmployeeList",
   CheckEmployeeAuth,
-  CheckAdminAuth,
+  CheckPermission('employee.view'),
   UserControllers.EmployeeList,
 );
 
-//Employee List (HOD)
+//Employee List (HOD) - Keep for backward compatibility, but use permission check
 UserRoutes.get(
   "/EmployeeListHod",
   CheckEmployeeAuth,
-  CheckHodAuth,
+  CheckPermission('employee.view'),
   UserControllers.EmployeeList,
 );
 
@@ -52,11 +53,11 @@ UserRoutes.get(
   UserControllers.UserList,
 );
 
-//Update Employee Details (Admin only)
+//Update Employee Details (Permission-based: employee.edit)
 UserRoutes.patch(
   "/UpdateEmployee/:userId",
   CheckEmployeeAuth,
-  CheckAdminAuth,
+  CheckPermission('employee.edit'),
   UserControllers.UpdateEmployee,
 );
 
@@ -76,11 +77,11 @@ UserRoutes.get(
   UserControllers.AdminsList,
 );
 
-//Delete Employee (Admin only)
+//Delete Employee (Permission-based: employee.delete)
 UserRoutes.delete(
   "/DeleteEmployee/:userId",
   CheckEmployeeAuth,
-  CheckAdminAuth,
+  CheckPermission('employee.delete'),
   UserControllers.DeleteEmployee,
 );
 

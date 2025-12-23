@@ -5,17 +5,37 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api';
 import PageTitle from '@/components/Common/PageTitle';
-import { Trash2 } from 'lucide-react';
+import { Trash2, FileText } from 'lucide-react';
 
 export default function LeaveTypesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string>('');
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
   useEffect(() => {
+    fetchUserRole();
     fetchLeaveTypes();
   }, []);
+
+  const fetchUserRole = async () => {
+    try {
+      const [userResponse, permissionsResponse] = await Promise.all([
+        api.get('/Auth/Me'),
+        api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
+      ]);
+      if (userResponse.data?.user?.role) {
+        setUserRole(userResponse.data.user.role.toLowerCase());
+      }
+      if (permissionsResponse.data?.data) {
+        setUserPermissions(permissionsResponse.data.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch user role:', err);
+    }
+  };
 
   // Refetch when page becomes visible (user navigates back)
   useEffect(() => {
@@ -86,7 +106,7 @@ export default function LeaveTypesPage() {
   }
 
   return (
-    <>
+    <div className="page-container">
       <PageTitle
         breadCrumbItems={[
           { label: 'Dashboard', path: '/dashboard' },
@@ -95,46 +115,58 @@ export default function LeaveTypesPage() {
         title="Leave Type List"
       />
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="p-6 border-b border-gray-200">
+      <div className="card overflow-hidden mt-6">
+        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-xl font-semibold text-gray-900">
             Leave Types ({leaveTypes.length})
           </h2>
+          {(userRole === 'admin' || userPermissions.includes('leavetype.create')) && (
+            <Link
+              href="/dashboard/leave-types/create"
+              className="bg-[#2563EB] text-white px-4 py-2.5 rounded-lg font-medium hover:bg-[#1D4ED8] transition-all text-sm shadow-sm hover:shadow-md"
+            >
+              + Add Leave Type
+            </Link>
+          )}
         </div>
         <div className="p-6">
           {leaveTypes.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="table-wrapper">
+              <table className="table">
                 <thead>
-                  <tr className="text-left text-gray-600 text-sm font-medium border-b">
-                    <th className="pb-3">Name</th>
-                    <th className="pb-3">Max Days</th>
-                    <th className="pb-3">Description</th>
-                    <th className="pb-3">Actions</th>
+                  <tr>
+                    <th>Name</th>
+                    <th>Max Days</th>
+                    <th>Description</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {leaveTypes.map((type) => (
-                    <tr key={type.id} className="border-b hover:bg-gray-50">
-                      <td className="py-3 text-gray-900 font-medium">{type.name}</td>
-                      <td className="py-3 text-gray-700">{type.max_days || '-'}</td>
-                      <td className="py-3 text-gray-700">{type.description || '-'}</td>
-                      <td className="py-3">
+                    <tr key={type.id}>
+                      <td className="font-medium text-gray-900">{type.name}</td>
+                      <td className="text-gray-700">{type.max_days || '-'}</td>
+                      <td className="text-gray-700">{type.description || '-'}</td>
+                      <td>
                         <div className="flex items-center gap-3">
-                          <Link
-                            href={`/dashboard/leave-types/edit/${type.id}`}
-                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                          >
-                            Edit
-                          </Link>
-                          <button
-                            onClick={() => handleDelete(type.id, type.name)}
-                            className="text-red-600 hover:text-red-800 text-sm font-medium flex items-center gap-1"
-                            title="Delete Leave Type"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                            Delete
-                          </button>
+                          {(userRole === 'admin' || userPermissions.includes('leavetype.edit')) && (
+                            <Link
+                              href={`/dashboard/leave-types/edit/${type.id}`}
+                              className="text-[#2563EB] hover:text-[#1D4ED8] text-sm font-medium transition-colors"
+                            >
+                              Edit
+                            </Link>
+                          )}
+                          {(userRole === 'admin' || userPermissions.includes('leavetype.delete')) && (
+                            <button
+                              onClick={() => handleDelete(type.id, type.name)}
+                              className="text-[#DC2626] hover:text-[#B91C1C] text-sm font-medium flex items-center gap-1 transition-colors"
+                              title="Delete Leave Type"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -143,11 +175,14 @@ export default function LeaveTypesPage() {
               </table>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">No leave types found</div>
+            <div className="text-center py-12">
+              <FileText className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500 text-sm">No leave types found</p>
+            </div>
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

@@ -25,11 +25,15 @@ export default function CreateDepartmentPage() {
       router.push('/dashboard/departments?refresh=true');
     } catch (err: any) {
       console.error('Department creation error:', err);
-      if (err.response?.status === 401 || err.response?.status === 403) {
+      if (err.response?.status === 401) {
+        // 401 = Authentication failed - redirect to login
         setError('Session expired. Please login again.');
         setTimeout(() => {
           window.location.href = '/login';
         }, 2000);
+      } else if (err.response?.status === 403) {
+        // 403 = Permission denied - show error but don't redirect
+        setError(err.response?.data?.message || 'You do not have permission to create departments. Please contact your administrator.');
       } else {
         setError(err.response?.data?.message || 'Failed to create department');
       }
@@ -49,7 +53,7 @@ export default function CreateDepartmentPage() {
         title="Create Department"
       />
 
-      <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
+      <div className="card mt-6">
         <div className="p-6">
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">

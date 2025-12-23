@@ -247,8 +247,9 @@ export const BulkApprove = async (req, res, next) => {
 /**
  * @desc Email-based Approval/Rejection
  * @access public (via token)
- * @route /api/v1/Leave/email-approve?token=xxx or /api/v1/Leave/email-reject?token=xxx
+ * @route /api/v1/Leave/email-action?token=xxx&action=approve or /api/v1/Leave/email-action?token=xxx&action=reject
  * @method GET
+ * @note One token per leave request, works for both approve and reject. Token can only be used once.
  */
 export const EmailApprove = async (req, res, next) => {
   try {

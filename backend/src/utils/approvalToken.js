@@ -10,37 +10,29 @@ export const generateApprovalToken = () => {
 };
 
 /**
- * Create approval tokens for a leave request
- * Creates separate tokens for approve and reject actions
+ * Create a single approval token for a leave request
+ * One token works for both approve and reject actions (action determined by query parameter)
+ * Token can only be used once
  */
-export const createApprovalTokens = async (leaveId, approverEmail, approverRole) => {
-  const approveToken = generateApprovalToken();
-  const rejectToken = generateApprovalToken();
+export const createApprovalToken = async (leaveId, approverEmail, approverRole) => {
+  const token = generateApprovalToken();
   
   // Tokens expire in 7 days
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 7);
   
   try {
-    // Create approve token
+    // Create a single token (action_type is null - action comes from query parameter)
     await database.query(
       `INSERT INTO approval_tokens (leave_id, approver_email, approver_role, token, action_type, expires_at)
-       VALUES ($1, $2, $3, $4, 'approve', $5)
+       VALUES ($1, $2, $3, $4, NULL, $5)
        ON CONFLICT (token) DO NOTHING`,
-      [leaveId, approverEmail.toLowerCase().trim(), approverRole.toLowerCase(), approveToken, expiresAt]
+      [leaveId, approverEmail.toLowerCase().trim(), approverRole.toLowerCase(), token, expiresAt]
     );
     
-    // Create reject token
-    await database.query(
-      `INSERT INTO approval_tokens (leave_id, approver_email, approver_role, token, action_type, expires_at)
-       VALUES ($1, $2, $3, $4, 'reject', $5)
-       ON CONFLICT (token) DO NOTHING`,
-      [leaveId, approverEmail.toLowerCase().trim(), approverRole.toLowerCase(), rejectToken, expiresAt]
-    );
-    
-    return { approveToken, rejectToken };
+    return token;
   } catch (error) {
-    console.error('Error creating approval tokens:', error);
+    console.error('Error creating approval token:', error);
     throw error;
   }
 };
@@ -86,6 +78,9 @@ export const verifyAndUseToken = async (token) => {
 export const getBaseUrl = () => {
   return process.env.FRONTEND_URL || process.env.BASE_URL || 'http://localhost:3000';
 };
+
+
+
 
 
 

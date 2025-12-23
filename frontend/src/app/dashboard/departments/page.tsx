@@ -13,6 +13,7 @@ export default function DepartmentsPage() {
   const [departments, setDepartments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string>('');
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
   useEffect(() => {
     fetchUserRole();
@@ -21,9 +22,15 @@ export default function DepartmentsPage() {
 
   const fetchUserRole = async () => {
     try {
-      const response = await api.get('/Auth/Me');
-      if (response.data?.user?.role) {
-        setUserRole(response.data.user.role.toLowerCase());
+      const [userResponse, permissionsResponse] = await Promise.all([
+        api.get('/Auth/Me'),
+        api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
+      ]);
+      if (userResponse.data?.user?.role) {
+        setUserRole(userResponse.data.user.role.toLowerCase());
+      }
+      if (permissionsResponse.data?.data) {
+        setUserPermissions(permissionsResponse.data.data);
       }
     } catch (err) {
       console.error('Failed to fetch user role:', err);
@@ -98,7 +105,7 @@ export default function DepartmentsPage() {
   }
 
   return (
-    <>
+    <div className="page-container">
       <PageTitle
         breadCrumbItems={[
           { label: 'Dashboard', path: '/dashboard' },
@@ -107,38 +114,39 @@ export default function DepartmentsPage() {
         title="Department List"
       />
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      <div className="card overflow-hidden mt-6">
         <div className="p-6 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-xl font-semibold text-gray-900">
             Departments ({departments.length})
           </h2>
-          <Link
-            href="/dashboard/departments/create"
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors text-sm"
-            style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
-          >
-            + Add Department
-          </Link>
+          {(userRole === 'admin' || userPermissions.includes('department.create')) && (
+            <Link
+              href="/dashboard/departments/create"
+              className="bg-[#2563EB] text-white px-4 py-2.5 rounded-lg font-medium hover:bg-[#1D4ED8] transition-all text-sm shadow-sm hover:shadow-md"
+            >
+              + Add Department
+            </Link>
+          )}
         </div>
         <div className="p-6">
           {departments.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="table-wrapper">
+              <table className="table">
                 <thead>
-                  <tr className="text-left text-gray-600 text-sm font-medium border-b">
-                    <th className="pb-3">Name</th>
-                    <th className="pb-3">Description</th>
-                    <th className="pb-3">Employees</th>
-                    <th className="pb-3">Actions</th>
+                  <tr>
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Employees</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {departments.map((dept) => (
-                    <tr key={dept.id} className="border-b hover:bg-gray-50">
-                      <td className="py-3 text-gray-900 font-medium">{dept.name}</td>
-                      <td className="py-3 text-gray-700">{dept.description || '-'}</td>
-                      <td className="py-3 text-gray-700">{dept.employee_count || 0}</td>
-                      <td className="py-3">
+                    <tr key={dept.id}>
+                      <td className="font-medium text-gray-900">{dept.name}</td>
+                      <td className="text-gray-700">{dept.description || '-'}</td>
+                      <td className="text-gray-700">{dept.employee_count || 0}</td>
+                      <td>
                         <div className="flex items-center gap-3">
                           <button
                             onClick={() => {
@@ -148,15 +156,15 @@ export default function DepartmentsPage() {
                                 alert('Department editing requires updating employee team assignments. This feature can be added if needed.');
                               }
                             }}
-                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                            className="text-[#2563EB] hover:text-[#1D4ED8] text-sm font-medium transition-colors"
                           >
                             Edit
                           </button>
-                          {/* Delete button - Admin only */}
-                          {userRole === 'admin' && (
+                          {/* Delete button - Permission-based */}
+                          {(userRole === 'admin' || userPermissions.includes('department.delete')) && (
                             <button
                               onClick={() => handleDeleteDepartment(dept.id, dept.name)}
-                              className="text-red-600 hover:text-red-800 p-1 rounded hover:bg-red-50"
+                              className="text-[#DC2626] hover:text-[#B91C1C] p-1.5 rounded hover:bg-red-50 transition-colors"
                               title="Delete Department"
                               aria-label="Delete department"
                             >
@@ -171,11 +179,14 @@ export default function DepartmentsPage() {
               </table>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-500">No departments found</div>
+            <div className="text-center py-12">
+              <Building className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500 text-sm">No departments found</p>
+            </div>
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

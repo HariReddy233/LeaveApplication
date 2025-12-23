@@ -49,30 +49,26 @@ export default function ApplyLeavePage() {
 
   const fetchLeaveTypes = async () => {
     try {
-      // Try to fetch from API first
-      try {
-        const response = await api.get('/LeaveType/LeaveTypeList');
-        const types = response.data?.data || response.data?.Data || response.data || [];
-        if (Array.isArray(types) && types.length > 0) {
-          setLeaveTypes(types.map((type: any) => ({
-            value: type.name || type.leave_type || type.value,
-            label: type.name || type.leave_type || type.label
-          })));
-          return;
-        }
-      } catch (apiErr) {
-        console.warn('Failed to fetch leave types from API, using defaults');
+      // Fetch from API - all leave types are dynamic from DB
+      const response = await api.get('/LeaveType/LeaveTypeList');
+      const types = response.data?.data || response.data?.Data || response.data || [];
+      if (Array.isArray(types) && types.length > 0) {
+        setLeaveTypes(types.map((type: any) => ({
+          value: type.name || type.leave_type || type.value,
+          label: type.name || type.leave_type || type.label
+        })));
+      } else {
+        // No leave types available
+        setLeaveTypes([]);
       }
-      
-      // Fallback to hardcoded types
-      setLeaveTypes([
-        { value: 'Sick Leave', label: 'Sick Leave' },
-        { value: 'Vacation', label: 'Vacation' },
-        { value: 'Personal', label: 'Personal' },
-        { value: 'Casual', label: 'Casual' },
-      ]);
-    } catch (err) {
-      console.error('Failed to fetch leave types:', err);
+    } catch (err: any) {
+      // Silently handle 403 (permission denied) - user just won't see leave types
+      // This will be handled by showing an error message in the UI
+      if (err.response?.status !== 403) {
+        console.error('Failed to fetch leave types:', err);
+      }
+      // Set empty array (no fallback to hardcoded)
+      setLeaveTypes([]);
     }
   };
 
@@ -110,6 +106,7 @@ export default function ApplyLeavePage() {
   const fetchBlockedDates = async () => {
     try {
       // Fetch all pending/approved leaves to get blocked dates
+      // Only fetch if user has permission, otherwise skip silently
       const response = await api.get('/Leave/LeaveList/1/1000/0');
       if (response.data?.Data) {
         const leaves = response.data.Data;
@@ -140,7 +137,13 @@ export default function ApplyLeavePage() {
         setBlockedDates(blocked);
       }
     } catch (err: any) {
-      console.error('Failed to fetch blocked dates:', err);
+      // Silently handle 403 (permission denied) - user just won't see blocked dates
+      // This is not critical functionality, so we continue without blocking dates
+      if (err.response?.status !== 403) {
+        console.error('Failed to fetch blocked dates:', err);
+      }
+      // Set empty array so form can still work
+      setBlockedDates([]);
     }
   };
 
@@ -162,7 +165,7 @@ export default function ApplyLeavePage() {
           ? 'approved' 
           : 'pending';
         setOverlapError(
-          `You already have a ${overlappingLeave.leave_type} leave from ${new Date(overlappingLeave.start_date).toLocaleDateString()} to ${new Date(overlappingLeave.end_date).toLocaleDateString()} that is ${status}. Please select different dates.`
+          `You already have a ${overlappingLeave.leave_type} leave from ${new Date(overlappingLeave.start_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })} to ${new Date(overlappingLeave.end_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })} that is ${status}. Please select different dates.`
         );
       } else {
         setOverlapError('');
@@ -244,7 +247,7 @@ export default function ApplyLeavePage() {
             ? 'approved' 
             : 'pending';
           setOverlapError(
-            `You already have a ${overlappingLeave.leave_type} leave from ${new Date(overlappingLeave.start_date).toLocaleDateString()} to ${new Date(overlappingLeave.end_date).toLocaleDateString()} that is ${status}. Please select different dates.`
+            `You already have a ${overlappingLeave.leave_type} leave from ${new Date(overlappingLeave.start_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })} to ${new Date(overlappingLeave.end_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })} that is ${status}. Please select different dates.`
           );
           setLoading(false);
           return;
@@ -292,11 +295,15 @@ export default function ApplyLeavePage() {
       router.push('/dashboard/leaves');
     } catch (err: any) {
       console.error('Leave application error:', err);
-      if (err.response?.status === 401 || err.response?.status === 403) {
+      if (err.response?.status === 401) {
+        // 401 = Authentication failed - redirect to login
         setError('Session expired. Please login again.');
         setTimeout(() => {
           window.location.href = '/login';
         }, 2000);
+      } else if (err.response?.status === 403) {
+        // 403 = Permission denied - show error but don't redirect
+        setError(err.response?.data?.message || 'You do not have permission to apply for leave. Please contact your administrator.');
       } else {
         setError(err.response?.data?.message || 'Failed to submit leave application');
       }
@@ -306,7 +313,7 @@ export default function ApplyLeavePage() {
   };
 
   return (
-    <>
+    <div className="page-container">
       <PageTitle
         breadCrumbItems={[
           { label: 'Leave', path: '/dashboard/leaves' },
@@ -319,7 +326,7 @@ export default function ApplyLeavePage() {
         title={isUpdate ? 'Update Leave' : 'Create Leave'}
       />
 
-      <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
+      <div className="card mt-6">
         <div className="p-6">
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
@@ -331,7 +338,7 @@ export default function ApplyLeavePage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Leave Type */}
               <div>
-                <label htmlFor="leave_type" className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="leave_type" className="form-label">
                   Leave Type <span className="text-red-500">*</span>
                 </label>
                 <select
@@ -340,7 +347,7 @@ export default function ApplyLeavePage() {
                   onChange={(e) => setFormData({ ...formData, leave_type: e.target.value })}
                   required
                   disabled={isUpdate}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="form-input disabled:bg-gray-100 disabled:cursor-not-allowed"
                 >
                   <option value="">Select Leave Type</option>
                   {leaveTypes.map((type) => (
@@ -384,7 +391,7 @@ export default function ApplyLeavePage() {
 
               {/* Number of Days - Auto-calculated, Read-only */}
               <div>
-                <label htmlFor="number_of_days" className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="number_of_days" className="form-label">
                   Number of Days
                   {selectedLeaveBalance && (
                     <span className="ml-2 text-xs text-gray-500 font-normal">
@@ -397,10 +404,10 @@ export default function ApplyLeavePage() {
                   type="number"
                   value={formData.number_of_days}
                   readOnly
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 cursor-not-allowed text-sm"
+                  className="form-input bg-gray-50 text-gray-600 cursor-not-allowed"
                   title="Number of days is automatically calculated based on start and end dates"
                 />
-                <p className="mt-1 text-xs text-gray-500">
+                <p className="mt-1.5 text-xs text-gray-500">
                   Automatically calculated from start and end dates
                 </p>
               </div>
@@ -510,6 +517,6 @@ export default function ApplyLeavePage() {
           </form>
         </div>
       </div>
-    </>
+    </div>
   );
 }

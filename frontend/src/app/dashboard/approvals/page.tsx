@@ -18,14 +18,47 @@ export default function ApprovalsPage() {
   const [selectedLeaves, setSelectedLeaves] = useState<Set<number>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
 
+  const [permissions, setPermissions] = useState<string[]>([]);
+
   const fetchUserRole = async () => {
     try {
-      const response = await api.get('/Auth/Me');
-      if (response.data?.user?.role) {
-        setUserRole(response.data.user.role.toLowerCase());
+      const [userResponse, permissionsResponse] = await Promise.all([
+        api.get('/Auth/Me'),
+        api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
+      ]);
+      
+      if (userResponse.data?.user?.role) {
+        const role = userResponse.data.user.role.toLowerCase();
+        setUserRole(role);
+        
+        const userPermissions = permissionsResponse.data?.data || [];
+        setPermissions(userPermissions);
+        
+        // Check if user has leave.approve or leave.reject permission
+        const hasApprove = userPermissions.includes('leave.approve');
+        const hasReject = userPermissions.includes('leave.reject');
+        
+        // For HOD and Employee, must have permission (no admin bypass)
+        if (role === 'hod' || role === 'HOD' || role === 'employee' || role === 'Employee') {
+          if (!hasApprove && !hasReject) {
+            router.push('/dashboard');
+            return;
+          }
+        } else if (role === 'admin') {
+          // Admin can access, but still check permissions for consistency
+          if (!hasApprove && !hasReject) {
+            router.push('/dashboard');
+            return;
+          }
+        } else {
+          // Other roles cannot access approvals
+          router.push('/dashboard');
+          return;
+        }
       }
     } catch (err) {
       console.error('Failed to fetch user role:', err);
+      router.push('/dashboard');
     }
   };
 
@@ -91,8 +124,12 @@ export default function ApprovalsPage() {
       }
     } catch (err: any) {
       console.error('Failed to fetch leaves:', err);
-      if (err.response?.status === 401 || err.response?.status === 403) {
-        setError('You do not have permission to view approvals');
+      if (err.response?.status === 401) {
+        // 401 = Authentication failed - redirect to login
+        router.push('/login');
+      } else if (err.response?.status === 403) {
+        // 403 = Permission denied - show error but don't redirect
+        setError(err.response?.data?.message || 'You do not have permission to view approvals');
       } else {
         setError('Failed to load leave applications. Please try again.');
       }
@@ -255,9 +292,9 @@ export default function ApprovalsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="page-container space-y-6">
       {/* Compact Header */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
+      <div className="card">
         <h1 className="text-lg font-semibold text-gray-900" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
           Leave Approvals
         </h1>
@@ -275,7 +312,7 @@ export default function ApprovalsPage() {
 
       {/* Bulk Actions - Only show if there are pending leaves and user can approve */}
       {filter === 'pending' && leaves.length > 0 && (userRole === 'hod' || userRole === 'admin') && (
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="card">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
               <input
@@ -313,7 +350,7 @@ export default function ApprovalsPage() {
       )}
 
       {/* Filter tabs - Modern Design */}
-      <div className="flex gap-2 bg-white rounded-lg border border-gray-200 p-1.5">
+      <div className="card p-2">
         <button
           onClick={() => setFilter('pending')}
           className={`flex-1 px-3 py-2 text-xs font-semibold transition-all rounded-md ${
@@ -355,7 +392,7 @@ export default function ApprovalsPage() {
       {/* Leave applications - Compact Cards */}
       <div className="space-y-3">
         {leaves.length === 0 && (
-          <div className="text-center py-10 bg-white rounded-lg border border-gray-200">
+          <div className="card text-center py-12">
             <Clock className="w-10 h-10 text-gray-300 mx-auto mb-2" />
             <p className="text-sm text-gray-500" style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
               No {filter} leave applications
@@ -380,8 +417,8 @@ export default function ApprovalsPage() {
           return (
             <div
               key={leave.id || leave._id}
-              className={`bg-white rounded-lg border p-4 hover:shadow-md transition-all ${
-                selectedLeaves.has(leave.id || leave._id) ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
+              className={`card p-5 hover:shadow-md transition-all ${
+                selectedLeaves.has(leave.id || leave._id) ? 'bg-blue-50 border-l-4 border-[#2563EB]' : ''
               }`}
             >
               {/* Header with Employee Info */}
@@ -448,30 +485,34 @@ export default function ApprovalsPage() {
                 )}
               </div>
 
-              {/* Status Badges - Hide HOD Status for Admin */}
+              {/* Status Badges - Show HOD and Admin with Names */}
               <div className="flex items-center gap-4 mb-3 pb-3 border-b border-gray-100">
-                {/* Only show HOD Status if user is HOD */}
-                {userRole === 'hod' && (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-gray-500">HOD:</span>
-                    <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', {
-                      'bg-green-100 text-green-700': hodStatus.toLowerCase() === 'approved',
-                      'bg-yellow-100 text-yellow-700': hodStatus.toLowerCase() === 'pending',
-                      'bg-red-100 text-red-700': hodStatus.toLowerCase() === 'rejected',
-                    })}>
-                      {hodStatus}
-                    </span>
-                  </div>
-                )}
-                {/* Always show Admin Status */}
+                {/* Always show HOD Status with Name */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-gray-500">HOD:</span>
+                  <span className="text-xs font-medium text-gray-700">
+                    {leave.HodApproverName || leave.hod_approver_name || 'N/A'}
+                  </span>
+                  <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', {
+                    'bg-green-100 text-green-700': hodStatus.toLowerCase() === 'approved',
+                    'bg-yellow-100 text-yellow-700': hodStatus.toLowerCase() === 'pending',
+                    'bg-red-100 text-red-700': hodStatus.toLowerCase() === 'rejected',
+                  })}>
+                    ({hodStatus})
+                  </span>
+                </div>
+                {/* Always show Admin Status with Name */}
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-gray-500">Admin:</span>
+                  <span className="text-xs font-medium text-gray-700">
+                    {leave.AdminApproverName || leave.admin_approver_name || 'N/A'}
+                  </span>
                   <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', {
                     'bg-green-100 text-green-700': adminStatus.toLowerCase() === 'approved',
                     'bg-yellow-100 text-yellow-700': adminStatus.toLowerCase() === 'pending',
                     'bg-red-100 text-red-700': adminStatus.toLowerCase() === 'rejected',
                   })}>
-                    {adminStatus}
+                    ({adminStatus})
                   </span>
                 </div>
               </div>
@@ -501,39 +542,8 @@ export default function ApprovalsPage() {
                   </button>
                 </div>
               ) : (
-                // Show status message if already approved/rejected, with delete button for admin
-                <div className="flex items-center justify-between gap-2">
-                  <span className={classNames('px-3 py-1.5 rounded-md text-xs font-semibold inline-flex items-center gap-1.5', {
-                    'bg-green-100 text-green-700': (userRole === 'hod' && hodStatus.toLowerCase() === 'approved') || (userRole === 'admin' && adminStatus.toLowerCase() === 'approved'),
-                    'bg-red-100 text-red-700': (userRole === 'hod' && hodStatus.toLowerCase() === 'rejected') || (userRole === 'admin' && adminStatus.toLowerCase() === 'rejected'),
-                  })}>
-                    {userRole === 'hod' ? (
-                      hodStatus.toLowerCase() === 'approved' ? (
-                        <>
-                          <CheckCircle className="w-3.5 h-3.5" />
-                          Approved
-                        </>
-                      ) : hodStatus.toLowerCase() === 'rejected' ? (
-                        <>
-                          <XCircle className="w-3.5 h-3.5" />
-                          Rejected
-                        </>
-                      ) : null
-                    ) : userRole === 'admin' ? (
-                      adminStatus.toLowerCase() === 'approved' ? (
-                        <>
-                          <CheckCircle className="w-3.5 h-3.5" />
-                          Approved
-                        </>
-                      ) : adminStatus.toLowerCase() === 'rejected' ? (
-                        <>
-                          <XCircle className="w-3.5 h-3.5" />
-                          Rejected
-                        </>
-                      ) : null
-                    ) : null}
-                  </span>
-                  {/* Delete button for admin only, on approved/rejected leaves */}
+                // Show delete button for admin only, on approved/rejected leaves (status already shown in header and middle section)
+                <div className="flex items-center justify-end gap-2">
                   {userRole === 'admin' && (adminStatus.toLowerCase() === 'approved' || adminStatus.toLowerCase() === 'rejected') && (
                     <button
                       onClick={() => handleDelete(leave.id || leave._id)}

@@ -32,8 +32,7 @@ const DateFormatter: React.FC<DateFormatterProps> = ({ date }) => {
     
     return (
       <span>
-        {day} {month} {year} <br />
-        <small>{hours}:{minutesStr} {ampm}</small>
+        {day} {month} {year}
       </span>
     );
   } catch (error) {
@@ -62,7 +61,7 @@ export function formatDate(date: string | Date | null | undefined) {
     hours = hours ? hours : 12;
     const minutesStr = minutes < 10 ? '0' + minutes : minutes;
     
-    return `${day} ${month} ${year}\n${hours}:${minutesStr} ${ampm}`;
+    return `${day} ${month} ${year}`;
   } catch (error) {
     return 'N/A';
   }
