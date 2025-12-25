@@ -204,6 +204,16 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
       });
     }
 
+    // Update Leave List (Organization Holidays & Blocked Dates)
+    if (can(PermissionKeys.CALENDAR_BLOCK_DATES)) {
+      menuItems.push({
+        key: 'UpdateLeaveList',
+        label: 'Update Leave List',
+        url: '/dashboard/update-leave-list',
+        icon: createIcon(Calendar, 'w-5 h-5'),
+      });
+    }
+
     // Settings is moved to "Additional menu items" section below the line in DashboardLayout
     // Not included in main menu to avoid duplication
 
@@ -362,6 +372,16 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
         key: 'Calendar',
         label: 'Calendar',
         url: '/dashboard/calendar',
+        icon: createIcon(Calendar, 'w-5 h-5'),
+      });
+    }
+
+    // Update Leave List (Organization Holidays & Blocked Dates) - HOD with permission
+    if (can(PermissionKeys.CALENDAR_BLOCK_DATES)) {
+      hodMenuItems.push({
+        key: 'UpdateLeaveList',
+        label: 'Update Leave List',
+        url: '/dashboard/update-leave-list',
         icon: createIcon(Calendar, 'w-5 h-5'),
       });
     }

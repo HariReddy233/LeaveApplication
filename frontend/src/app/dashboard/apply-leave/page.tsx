@@ -176,13 +176,29 @@ export default function ApplyLeavePage() {
     }
   };
 
+  // Calculate days excluding weekends (Saturday and Sunday)
   const calculateDays = () => {
     if (formData.start_date && formData.end_date) {
       const start = new Date(formData.start_date);
       const end = new Date(formData.end_date);
-      const diffTime = Math.abs(end.getTime() - start.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-      setFormData({ ...formData, number_of_days: diffDays.toString() });
+      
+      // Reset time to midnight for accurate day calculation
+      start.setHours(0, 0, 0, 0);
+      end.setHours(0, 0, 0, 0);
+      
+      let count = 0;
+      const current = new Date(start);
+      
+      while (current <= end) {
+        const dayOfWeek = current.getDay();
+        // Exclude weekends (0 = Sunday, 6 = Saturday)
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+          count++;
+        }
+        current.setDate(current.getDate() + 1);
+      }
+      
+      setFormData({ ...formData, number_of_days: count.toString() });
     }
   };
 
@@ -232,9 +248,52 @@ export default function ApplyLeavePage() {
     setBalanceError('');
     setOverlapError('');
 
-    // Check for overlapping dates before submission
+    // Check for overlapping dates and blocked dates before submission
     if (formData.start_date && formData.end_date) {
       try {
+        // Check blocked dates (organization holidays + employee-specific)
+        // Use AllBlockedDates to get both organization holidays and employee blocked dates
+        const startDateStr = formData.start_date;
+        const endDateStr = formData.end_date;
+        const blockedDatesResponse = await api.get(`/Calendar/AllBlockedDates?start_date=${startDateStr}&end_date=${endDateStr}`).catch(() => ({ data: { data: [] } }));
+        const allBlockedDates = blockedDatesResponse.data?.data || [];
+        
+        // Get all dates in the range
+        const start = new Date(formData.start_date);
+        const end = new Date(formData.end_date);
+        start.setHours(0, 0, 0, 0);
+        end.setHours(0, 0, 0, 0);
+        
+        const datesInRange: string[] = [];
+        const current = new Date(start);
+        while (current <= end) {
+          datesInRange.push(current.toISOString().split('T')[0]);
+          current.setDate(current.getDate() + 1);
+        }
+        
+        // Check if any date in range is blocked (organization holiday or employee-specific)
+        const blockedInRange = allBlockedDates.filter((blocked: any) => {
+          // Handle both organization holidays (holiday_date) and employee blocked dates (blocked_date)
+          const blockedDate = blocked.holiday_date || blocked.blocked_date;
+          if (!blockedDate) return false;
+          const blockedDateStr = new Date(blockedDate).toISOString().split('T')[0];
+          return datesInRange.includes(blockedDateStr);
+        });
+        
+        if (blockedInRange.length > 0) {
+          const blockedItem = blockedInRange[0];
+          const blockedDate = new Date(blockedItem.holiday_date || blockedItem.blocked_date);
+          const reason = blockedItem.reason || blockedItem.holiday_name || 'blocked date';
+          const isHoliday = blockedItem.type === 'organization_holiday';
+          const errorMsg = isHoliday 
+            ? `Leave is not allowed on ${blockedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}. Organization Holiday: ${reason}. Please select different dates.`
+            : `Leave is not allowed on ${blockedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}. ${reason}. Please select different dates.`;
+          setError(errorMsg);
+          setLoading(false);
+          return;
+        }
+        
+        // Check overlapping leaves
         const overlapResponse = await api.post('/Leave/CheckOverlappingLeaves', {
           start_date: formData.start_date,
           end_date: formData.end_date,
@@ -253,7 +312,7 @@ export default function ApplyLeavePage() {
           return;
         }
       } catch (err: any) {
-        console.error('Failed to check overlapping dates:', err);
+        console.error('Failed to check dates:', err);
         // Continue with submission if check fails (backend will validate)
       }
     }

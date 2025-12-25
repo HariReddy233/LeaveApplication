@@ -12,6 +12,7 @@ import LeaveTypeRoutes from "./LeaveTypeRoutes.js";
 import DepartmentRoutes from "./DepartmentRoutes.js";
 import SSERoutes from "./SSERoutes.js";
 import PermissionRoutes from "./PermissionRoutes.js";
+import HolidayRoutes from "./HolidayRoutes.js";
 
 //Auth Routes
 routes.use("/Auth", AuthRoutes);
@@ -39,6 +40,9 @@ routes.use("/SSE", SSERoutes);
 
 //Permission Routes
 routes.use("/Permission", PermissionRoutes);
+
+//Holiday Routes
+routes.use("/Holiday", HolidayRoutes);
 
 export default routes;
 

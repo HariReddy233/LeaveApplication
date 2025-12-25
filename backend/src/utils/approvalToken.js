@@ -22,17 +22,74 @@ export const createApprovalToken = async (leaveId, approverEmail, approverRole) 
   expiresAt.setDate(expiresAt.getDate() + 7);
   
   try {
+    // First, ensure the table exists (create if not exists)
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS approval_tokens (
+        id SERIAL PRIMARY KEY,
+        leave_id INTEGER NOT NULL,
+        approver_email VARCHAR(255) NOT NULL,
+        approver_role VARCHAR(50) NOT NULL,
+        token VARCHAR(255) NOT NULL UNIQUE,
+        action_type VARCHAR(50) NULL,
+        used BOOLEAN DEFAULT FALSE,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `).catch(() => {
+      // Table might already exist, ignore error
+    });
+    
+    // Fix existing table: Allow NULL in action_type (if table already exists with NOT NULL constraint)
+    await database.query(`
+      ALTER TABLE approval_tokens 
+      ALTER COLUMN action_type DROP NOT NULL
+    `).catch((alterError) => {
+      // Column might already allow NULL or constraint doesn't exist, ignore error
+      if (alterError.code !== '42804' && alterError.code !== '42704') {
+        console.warn('Warning: Could not alter action_type column:', alterError.message);
+      }
+    });
+    
+    // Create indexes if they don't exist
+    await database.query(`
+      CREATE INDEX IF NOT EXISTS idx_approval_tokens_token ON approval_tokens(token)
+    `).catch(() => {});
+    
     // Create a single token (action_type is null - action comes from query parameter)
-    await database.query(
+    console.log(`🔑 Attempting to create approval token for leave_id: ${leaveId}, approver: ${approverEmail}, role: ${approverRole}`);
+    console.log(`🔑 Generated token (first 10 chars): ${token.substring(0, 10)}...`);
+    console.log(`🔑 Expires at: ${expiresAt}`);
+    
+    const result = await database.query(
       `INSERT INTO approval_tokens (leave_id, approver_email, approver_role, token, action_type, expires_at)
        VALUES ($1, $2, $3, $4, NULL, $5)
-       ON CONFLICT (token) DO NOTHING`,
+       ON CONFLICT (token) DO NOTHING
+       RETURNING token, id`,
       [leaveId, approverEmail.toLowerCase().trim(), approverRole.toLowerCase(), token, expiresAt]
     );
     
-    return token;
+    if (result.rows.length === 0) {
+      // Token conflict (very rare), generate a new one
+      console.warn('⚠️ Token conflict detected, generating new token');
+      return await createApprovalToken(leaveId, approverEmail, approverRole);
+    }
+    
+    const createdToken = result.rows[0].token;
+    const tokenId = result.rows[0].id;
+    console.log(`✅ Approval token created successfully!`);
+    console.log(`✅ Token ID: ${tokenId}, leave_id: ${leaveId}, approver: ${approverEmail}, role: ${approverRole}`);
+    console.log(`✅ Token (first 10 chars): ${createdToken.substring(0, 10)}...`);
+    return createdToken;
   } catch (error) {
-    console.error('Error creating approval token:', error);
+    console.error('❌ Error creating approval token:', error);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      leaveId,
+      approverEmail,
+      approverRole
+    });
     throw error;
   }
 };
@@ -73,10 +130,19 @@ export const verifyAndUseToken = async (token) => {
 };
 
 /**
- * Get base URL for email links
+ * Get base URL for email links (Backend API URL for email approvals)
  */
 export const getBaseUrl = () => {
-  return process.env.FRONTEND_URL || process.env.BASE_URL || 'http://localhost:3000';
+  // CRITICAL: Always use BACKEND_URL for API endpoints, NEVER FRONTEND_URL
+  // Email buttons must point to backend API, not frontend Next.js
+  return process.env.BACKEND_URL || process.env.API_URL || 'http://localhost:3001';
+};
+
+/**
+ * Get HR Portal URL for email links
+ */
+export const getHRPortalUrl = () => {
+  return process.env.HR_PORTAL_URL || 'https://hrportal.consultare.io/';
 };
 
 

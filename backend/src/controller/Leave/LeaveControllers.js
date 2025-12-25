@@ -254,69 +254,82 @@ export const BulkApprove = async (req, res, next) => {
 export const EmailApprove = async (req, res, next) => {
   try {
     const result = await EmailApprovalService(req);
-    // Redirect to a success page or return JSON
-    // For now, return a simple HTML response that can be displayed
+    const { action } = req.query;
+    const actionText = action?.toLowerCase() === 'approve' ? 'Approved' : 'Rejected';
+    const approverName = result.approverName || 'Approver';
+    
+    // Set Content-Type to HTML (MANDATORY - browser must render HTML, not JSON)
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    
+    // Return simple HTML confirmation page (NO redirect, NO JSON, NO navigation)
     res.status(200).send(`
       <!DOCTYPE html>
       <html>
       <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Leave Request Processed</title>
+        <title>Leave Action Completed</title>
         <style>
           body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: Arial, sans-serif;
+            background: #f6f8fb;
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
+            height: 100vh;
             margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
           }
-          .container {
-            background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+          .box {
+            background: #fff;
+            padding: 30px;
+            border-radius: 10px;
             text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             max-width: 500px;
           }
-          .success-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-          }
-          h1 {
-            color: #10b981;
+          h2 {
+            color: ${actionText === 'Approved' ? '#10b981' : '#ef4444'};
             margin-bottom: 16px;
           }
           p {
             color: #6b7280;
             line-height: 1.6;
-            margin-bottom: 24px;
+            margin: 12px 0;
           }
-          .button {
+          a {
             display: inline-block;
-            padding: 12px 24px;
-            background: #4f46e5;
-            color: white;
+            margin-top: 15px;
             text-decoration: none;
-            border-radius: 6px;
-            font-weight: 600;
+            color: #2563eb;
+            font-weight: bold;
+          }
+          a:hover {
+            text-decoration: underline;
           }
         </style>
       </head>
       <body>
-        <div class="container">
-          <div class="success-icon">✅</div>
-          <h1>Leave Request Processed</h1>
-          <p>${result.message}</p>
-          <p style="font-size: 14px; color: #9ca3af;">You can close this window now.</p>
+        <div class="box">
+          <h2>Leave ${actionText}</h2>
+          <p>This leave request has been processed successfully.</p>
+          <p>You may now close this tab.</p>
+          <a href="https://hrportal.consultare.io/">Go to HR Portal</a>
         </div>
       </body>
       </html>
     `);
   } catch (error) {
-    // Return error page
+    // Set Content-Type to HTML for error page (MANDATORY)
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    
+    // Determine error message
+    const isAlreadyProcessed = error.message && (
+      error.message.includes('already been processed') || 
+      error.message.includes('already been') ||
+      error.message.includes('already used')
+    );
+    
+    // Return simple HTML error page (NO redirect, NO JSON)
     res.status(error.status || 400).send(`
       <!DOCTYPE html>
       <html>
@@ -326,43 +339,53 @@ export const EmailApprove = async (req, res, next) => {
         <title>Error Processing Leave Request</title>
         <style>
           body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: Arial, sans-serif;
+            background: #f6f8fb;
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
+            height: 100vh;
             margin: 0;
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
           }
-          .container {
-            background: white;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+          .box {
+            background: #fff;
+            padding: 30px;
+            border-radius: 10px;
             text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
             max-width: 500px;
           }
-          .error-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
-          }
-          h1 {
+          h2 {
             color: #ef4444;
             margin-bottom: 16px;
           }
           p {
             color: #6b7280;
             line-height: 1.6;
-            margin-bottom: 24px;
+            margin: 12px 0;
+          }
+          a {
+            display: inline-block;
+            margin-top: 15px;
+            text-decoration: none;
+            color: #2563eb;
+            font-weight: bold;
+          }
+          a:hover {
+            text-decoration: underline;
           }
         </style>
       </head>
       <body>
-        <div class="container">
-          <div class="error-icon">❌</div>
-          <h1>Unable to Process Request</h1>
-          <p>${error.message || 'An error occurred while processing your request.'}</p>
-          <p style="font-size: 14px; color: #9ca3af;">This link may have expired or already been used. Please log in to the Leave Management Portal to review this request.</p>
+        <div class="box">
+          <h2>Unable to Process Request</h2>
+          <p><strong>${error.message || 'An error occurred while processing your request.'}</strong></p>
+          ${isAlreadyProcessed ? 
+            '<p>This leave request has already been processed.</p>' :
+            '<p>This link may have expired or already been used.</p>'
+          }
+          <p>Please log in to the HR Portal to review this request.</p>
+          <a href="https://hrportal.consultare.io/">Go to HR Portal</a>
         </div>
       </body>
       </html>

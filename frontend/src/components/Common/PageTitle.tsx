@@ -9,7 +9,7 @@ type BreadcrumbItem = {
 };
 
 type PageTitleProps = {
-  breadCrumbItems: BreadcrumbItem[];
+  breadCrumbItems?: BreadcrumbItem[];
   title: string;
 };
 
@@ -17,7 +17,7 @@ type PageTitleProps = {
  * PageTitle Component - Matches HR Portal
  * Displays breadcrumbs and page title
  */
-export default function PageTitle({ breadCrumbItems, title }: PageTitleProps) {
+export default function PageTitle({ breadCrumbItems = [], title }: PageTitleProps) {
   return (
     <div className="mb-4">
       <div className="flex items-center justify-between mb-2">
@@ -25,7 +25,7 @@ export default function PageTitle({ breadCrumbItems, title }: PageTitleProps) {
           <Link href="/dashboard" className="hover:text-gray-900">
             Dashboard
           </Link>
-          {breadCrumbItems.map((item, index) => (
+          {breadCrumbItems && breadCrumbItems.length > 0 && breadCrumbItems.map((item, index) => (
             <span key={index} className="flex items-center">
               <span className="mx-2">/</span>
               {item.active ? (

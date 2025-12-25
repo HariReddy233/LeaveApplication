@@ -1,6 +1,7 @@
 //Internal Lib Import
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import { getHRPortalUrl } from './approvalToken.js';
 
 dotenv.config();
 
@@ -50,6 +51,11 @@ export const sendLeaveApplicationEmail = async ({
   baseUrl = null
 }) => {
   try {
+    // Debug logging
+    console.log(`📧 Preparing email to ${to}`);
+    console.log(`📧 Approval token provided: ${approvalToken ? 'YES (' + approvalToken.substring(0, 10) + '...)' : 'NO'}`);
+    console.log(`📧 Base URL: ${baseUrl || 'NOT PROVIDED'}`);
+    
     // Check if email is configured
     if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
       console.error('❌ EMAIL CONFIGURATION ERROR: SMTP_USER or SMTP_PASS missing in .env file');
@@ -274,24 +280,24 @@ export const sendLeaveApplicationEmail = async ({
               
               ${approvalToken ? `
               <div class="action-buttons" style="margin: 24px 0; text-align: center;">
-                <a href="${baseUrl || 'http://localhost:3000'}/api/Leave/email-action?token=${approvalToken}&action=approve" 
+                <a href="${baseUrl || 'http://localhost:3001'}/api/v1/Leave/email-action?token=${approvalToken}&action=approve" 
                    style="display: inline-block; background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
                   ✅ Approve
                 </a>
-                <a href="${baseUrl || 'http://localhost:3000'}/api/Leave/email-action?token=${approvalToken}&action=reject" 
+                <a href="${baseUrl || 'http://localhost:3001'}/api/v1/Leave/email-action?token=${approvalToken}&action=reject" 
                    style="display: inline-block; background-color: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
                   ❌ Reject
                 </a>
               </div>
               <div class="action-note" style="background: #fef3c7; border: 1px solid #fbbf24; border-radius: 6px; padding: 12px; margin: 16px 0; text-align: center;">
                 <p class="action-note-text" style="color: #92400e; font-size: 12px; font-weight: 500;">
-                  ⚡ You can approve or reject this leave request directly from this email. This link can only be used once. You can also log in to the Leave Management Portal for more details.
+                  ⚡ You can approve or reject this leave request directly from this email. This link can only be used once. You can also log in to the HR Portal for more details.
                 </p>
               </div>
               ` : `
               <div class="action-note">
                 <p class="action-note-text">
-                  ⚡ Please log in to the Leave Management Portal to review and approve this application.
+                  ⚡ Please log in to the HR Portal to review and approve this application.
                 </p>
               </div>
               `}
@@ -300,6 +306,10 @@ export const sendLeaveApplicationEmail = async ({
               <p class="footer-text">
                 This is an automated notification from the Consultare Leave Management System.<br>
                 Please do not reply to this email.
+              </p>
+              <p class="footer-text" style="margin-top: 12px;">
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none; font-weight: 600;">View in HR Portal</a> | 
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none;">${getHRPortalUrl()}</a>
               </p>
               <p class="footer-text" style="margin-top: 12px; color: #d1d5db;">
                 &copy; ${new Date().getFullYear()} Consultare. All rights reserved.
@@ -326,13 +336,38 @@ End Date: ${endDate}
 Number of Days: ${number_of_days || 'N/A'}
 ${reason ? `Reason: ${reason}` : ''}
 
-Please log in to the Leave Management Portal to review and approve this application.
+Please log in to the HR Portal to review and approve this application.
+
+HR Portal: ${getHRPortalUrl()}
 
 This is an automated email. Please do not reply.
 © ${new Date().getFullYear()} Consultare Leave Management System`
     };
 
+    // Debug: Verify buttons are in HTML
+    if (approvalToken) {
+      const htmlIncludesButtons = mailOptions.html.includes('action-buttons') && 
+                                  mailOptions.html.includes('email-action?token=') &&
+                                  mailOptions.html.includes('action=approve');
+      console.log(`✅ EMAIL DEBUG: Approval token provided: ${approvalToken.substring(0, 10)}...`);
+      console.log(`✅ EMAIL DEBUG: HTML includes buttons: ${htmlIncludesButtons ? 'YES ✅' : 'NO ❌'}`);
+      if (!htmlIncludesButtons) {
+        console.error('❌ EMAIL DEBUG ERROR: Buttons not found in HTML even though token is provided!');
+        console.error('❌ HTML snippet (first 500 chars):', mailOptions.html.substring(0, 500));
+      } else {
+        console.log(`✅ EMAIL DEBUG: Button URLs will use baseUrl: ${baseUrl || 'http://localhost:3001'}`);
+      }
+    } else {
+      console.warn(`⚠️ EMAIL DEBUG: No approval token provided, buttons will NOT be included in email to ${to}`);
+    }
+    
     const info = await mailTransporter.sendMail(mailOptions);
+    console.log(`✅ Leave application email sent to ${to} - Message ID: ${info.messageId}`);
+    console.log(`✅ Email includes approval buttons: ${approvalToken ? 'YES' : 'NO'}`);
+    if (approvalToken && baseUrl) {
+      const approveUrl = `${baseUrl}/api/v1/Leave/email-action?token=${approvalToken.substring(0, 10)}...&action=approve`;
+      console.log(`✅ Approval button URL: ${approveUrl}`);
+    }
     return info;
   } catch (error) {
     console.error('❌ Failed to send leave application email:', error.message);
@@ -573,13 +608,17 @@ export const sendLeaveApprovalEmail = async ({
               </div>
               
               <p style="color: #6b7280; font-size: 14px; margin-top: 24px; text-align: center;">
-                Please log in to the Leave Management Portal to view more details.
+                Please log in to the HR Portal to view more details.
               </p>
             </div>
             <div class="footer">
               <p class="footer-text">
                 This is an automated notification from the Consultare Leave Management System.<br>
                 Please do not reply to this email.
+              </p>
+              <p class="footer-text" style="margin-top: 12px;">
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none; font-weight: 600;">View in HR Portal</a> | 
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none;">${getHRPortalUrl()}</a>
               </p>
               <p class="footer-text" style="margin-top: 12px; color: #d1d5db;">
                 &copy; ${new Date().getFullYear()} Consultare. All rights reserved.
@@ -601,7 +640,9 @@ End Date: ${endDate}
 Number of Days: ${number_of_days || 'N/A'}
 ${remark ? `Remarks: ${remark}` : ''}
 
-Please log in to the Leave Management Portal to view more details.
+Please log in to the HR Portal to view more details.
+
+HR Portal: ${getHRPortalUrl()}
 
 Thank you for using our Leave Management System.
 
@@ -798,6 +839,10 @@ export const sendLeaveInfoNotificationEmail = async ({
                 This is an automated notification from the Consultare Leave Management System.<br>
                 Please do not reply to this email.
               </p>
+              <p class="footer-text" style="margin-top: 12px;">
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none; font-weight: 600;">View in HR Portal</a> | 
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none;">${getHRPortalUrl()}</a>
+              </p>
             </div>
           </div>
         </body>
@@ -817,6 +862,8 @@ Number of Days: ${number_of_days || 'N/A'}
 ${approver_name ? `Approved by: ${approver_name}` : ''}
 
 This is an informational notification for your awareness. No action is required.
+
+HR Portal: ${getHRPortalUrl()}
 
 © ${new Date().getFullYear()} Consultare Leave Management System`
     };
@@ -958,6 +1005,10 @@ export const sendPasswordResetOTPEmail = async ({
                 This is an automated notification from the Consultare Leave Management System.<br>
                 Please do not reply to this email.
               </p>
+              <p class="footer-text" style="margin-top: 12px;">
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none; font-weight: 600;">View in HR Portal</a> | 
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none;">${getHRPortalUrl()}</a>
+              </p>
               <p class="footer-text" style="margin-top: 12px; color: #d1d5db;">
                 &copy; ${new Date().getFullYear()} Consultare. All rights reserved.
               </p>
@@ -978,6 +1029,8 @@ This OTP is valid for 2 minutes only.
 
 If you did not request this password reset, please ignore this email.
 
+HR Portal: ${getHRPortalUrl()}
+
 © ${new Date().getFullYear()} Consultare Leave Management System`
     };
 
@@ -990,8 +1043,134 @@ If you did not request this password reset, please ignore this email.
   }
 };
 
+/**
+ * Send Holiday Reminder Email
+ */
+export const sendHolidayReminderEmail = async ({
+  to,
+  recipient_name,
+  holiday_name,
+  holiday_date,
+  days_until,
+  notification_type,
+  hrPortalUrl
+}) => {
+  try {
+    const mailTransporter = getTransporter();
+    if (!mailTransporter) {
+      throw new Error('Email transporter not configured');
+    }
+
+    const holidayDateObj = new Date(holiday_date);
+    const formattedDate = holidayDateObj.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    let subject = '';
+    let messageText = '';
+    let titleText = '';
+
+    if (notification_type === '2_days_before') {
+      subject = `Upcoming Holiday: ${holiday_name} in 2 Days`;
+      titleText = 'Upcoming Holiday';
+      messageText = `This is a reminder that ${holiday_name} is coming up in 2 days (${formattedDate}).`;
+    } else if (notification_type === '1_day_before') {
+      subject = `Reminder: Holiday Tomorrow - ${holiday_name}`;
+      titleText = 'Holiday Tomorrow';
+      messageText = `This is a reminder that tomorrow (${formattedDate}) is ${holiday_name}.`;
+    } else if (notification_type === 'on_day') {
+      subject = `Today is a Holiday: ${holiday_name}`;
+      titleText = 'Holiday Today';
+      messageText = `Today (${formattedDate}) is ${holiday_name}. Enjoy your holiday!`;
+    }
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME || 'Consultare Leave Management'}" <${process.env.SMTP_USER}>`,
+      to: to,
+      subject: subject,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>${subject}</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f6f8fb;">
+          <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); padding: 32px;">
+              <div style="text-align: center; margin-bottom: 24px;">
+                <h1 style="color: #10b981; font-size: 28px; margin: 0;">🎉 ${titleText}</h1>
+              </div>
+              
+              <div style="margin-bottom: 24px;">
+                <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 16px 0;">
+                  Dear ${recipient_name || 'Team Member'},
+                </p>
+                <p style="color: #374151; font-size: 16px; line-height: 1.6; margin: 0 0 16px 0;">
+                  ${messageText}
+                </p>
+              </div>
+
+              <div style="background: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin: 24px 0; border-radius: 4px;">
+                <p style="color: #166534; font-size: 16px; font-weight: 600; margin: 0 0 8px 0;">
+                  ${holiday_name}
+                </p>
+                <p style="color: #166534; font-size: 14px; margin: 0;">
+                  ${formattedDate}
+                </p>
+              </div>
+
+              <div style="text-align: center; margin: 32px 0;">
+                <a href="${hrPortalUrl || 'https://hrportal.consultare.io/'}" 
+                   style="display: inline-block; padding: 12px 24px; background: #4f46e5; color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">
+                  View in HR Portal
+                </a>
+              </div>
+
+              <div style="border-top: 1px solid #e5e7eb; padding-top: 24px; margin-top: 32px;">
+                <p style="color: #9ca3af; font-size: 12px; text-align: center; margin: 0;">
+                  This is an automated notification from the Consultare Leave Management System.<br>
+                  <a href="${hrPortalUrl || 'https://hrportal.consultare.io/'}" style="color: #4f46e5; text-decoration: none;">${hrPortalUrl || 'https://hrportal.consultare.io/'}</a>
+                </p>
+                <p style="color: #d1d5db; font-size: 12px; text-align: center; margin-top: 12px;">
+                  &copy; ${new Date().getFullYear()} Consultare. All rights reserved.
+                </p>
+              </div>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `${subject}
+
+Dear ${recipient_name || 'Team Member'},
+
+${messageText}
+
+Holiday: ${holiday_name}
+Date: ${formattedDate}
+
+HR Portal: ${hrPortalUrl || 'https://hrportal.consultare.io/'}
+
+© ${new Date().getFullYear()} Consultare Leave Management System`
+    };
+
+    const info = await mailTransporter.sendMail(mailOptions);
+    console.log(`✅ Holiday reminder email sent to ${to} - Message ID: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`❌ Failed to send holiday reminder email:`, error.message);
+    throw error;
+  }
+};
+
 export default {
   sendLeaveApplicationEmail,
   sendLeaveApprovalEmail,
-  sendPasswordResetOTPEmail
+  sendPasswordResetOTPEmail,
+  sendHolidayReminderEmail
 };

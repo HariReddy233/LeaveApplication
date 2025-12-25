@@ -101,6 +101,7 @@ export const PermissionKeys = {
   
   // Calendar Management
   CALENDAR_VIEW: 'calendar.view',
+  CALENDAR_BLOCK_DATES: 'calendar.block_dates',
   
   // Settings
   SETTINGS_VIEW: 'settings.view',

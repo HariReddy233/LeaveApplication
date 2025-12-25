@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 
 export default function CalendarPage() {
   const [leaves, setLeaves] = useState<any[]>([]);
+  const [blockedDates, setBlockedDates] = useState<any[]>([]);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({
@@ -54,7 +55,7 @@ export default function CalendarPage() {
     return days;
   }, [currentYear, currentMonth, firstDayOfMonth, daysInMonth, daysInPreviousMonth]);
 
-  // Map leaves to calendar days
+  // Map leaves and blocked dates to calendar days
   const calendarWithLeaves = useMemo(() => {
     return calendarDays.map(day => {
       const dayLeaves = leaves.filter(leave => {
@@ -70,9 +71,34 @@ export default function CalendarPage() {
         return dayDate >= startDate && dayDate <= endDate;
       });
       
-      return { ...day, leaves: dayLeaves };
+      // Check if this day is blocked (holiday or employee-specific) and get details
+      const dayDateStr = day.date.toISOString().split('T')[0];
+      let blockedInfo = null;
+      const blockedDateMatch = blockedDates.find(blocked => {
+        // Handle both organization holidays (holiday_date) and employee blocked dates (blocked_date)
+        const blockedDate = blocked.holiday_date || blocked.blocked_date;
+        if (!blockedDate) return false;
+        const blockedDateStr = new Date(blockedDate).toISOString().split('T')[0];
+        return blockedDateStr === dayDateStr;
+      });
+      
+      if (blockedDateMatch) {
+        blockedInfo = {
+          type: blockedDateMatch.type || 'blocked',
+          reason: blockedDateMatch.reason || blockedDateMatch.holiday_name || 'Blocked Date',
+          isHoliday: blockedDateMatch.type === 'organization_holiday'
+        };
+      }
+      
+      const isBlocked = !!blockedInfo;
+      
+      // Check if weekend
+      const dayOfWeek = day.date.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      
+      return { ...day, leaves: dayLeaves, isBlocked, isWeekend, blockedInfo };
     });
-  }, [calendarDays, leaves]);
+  }, [calendarDays, leaves, blockedDates]);
 
   // Fetch functions
   const fetchCalendarData = async () => {
@@ -110,12 +136,26 @@ export default function CalendarPage() {
         }
       }
       
-      const response = await api.get(`/Calendar/CalendarView?${params.toString()}`, {
-        headers: { 'X-Skip-Redirect': 'true' }
-      });
+      const [leavesResponse, blockedDatesResponse] = await Promise.all([
+        api.get(`/Calendar/CalendarView?${params.toString()}`, {
+          headers: { 'X-Skip-Redirect': 'true' }
+        }),
+        api.get(`/Calendar/AllBlockedDates?${params.toString()}`, {
+          headers: { 'X-Skip-Redirect': 'true' }
+        }).catch(() => ({ data: { data: [] } })) // Silently fail if no permission
+      ]);
+      
+      const response = leavesResponse;
       
       const leavesData = response.data?.data || response.data || [];
       setLeaves(leavesData);
+      
+      // Set blocked dates (organization holidays + employee-specific)
+      if (blockedDatesResponse?.data?.data) {
+        setBlockedDates(blockedDatesResponse.data.data);
+      } else {
+        setBlockedDates([]);
+      }
     } catch (err: any) {
       console.error('Failed to fetch calendar data:', err);
       setLeaves([]);
@@ -307,23 +347,50 @@ export default function CalendarPage() {
           <div className="grid grid-cols-7">
             {calendarWithLeaves.map((day, index) => {
               const isToday = day.date.toDateString() === new Date().toDateString();
+              const isBlocked = day.isBlocked || false;
+              const isWeekend = day.isWeekend || false;
+              const blockedInfo = day.blockedInfo;
               const uniqueLeaves = day.leaves.filter((leave, idx, self) => 
                 idx === self.findIndex(l => l.id === leave.id)
               );
+              
+              // Build tooltip text for blocked dates
+              let tooltipText = '';
+              if (isBlocked && blockedInfo) {
+                if (blockedInfo.isHoliday) {
+                  tooltipText = `Organization Holiday: ${blockedInfo.reason}`;
+                } else {
+                  tooltipText = `Blocked Date: ${blockedInfo.reason || 'No reason provided'}`;
+                }
+              } else if (isWeekend) {
+                tooltipText = 'Weekend';
+              }
               
               return (
                 <div
                   key={index}
                   className={`relative min-h-[90px] p-1.5 border-r border-b border-gray-200 last:border-r-0 ${
-                    !day.isCurrentMonth ? 'bg-gray-50' : 'bg-white'
-                  } ${isToday ? 'bg-blue-50' : ''} hover:bg-gray-50 transition-colors`}
+                    !day.isCurrentMonth ? 'bg-gray-50' : 
+                    isBlocked ? 'bg-red-50' : 
+                    isWeekend ? 'bg-gray-100' :
+                    'bg-white'
+                  } ${isToday ? 'ring-2 ring-blue-500' : ''} ${!isBlocked ? 'hover:bg-gray-50' : 'cursor-not-allowed opacity-75'} transition-colors`}
+                  title={tooltipText}
                 >
                   <div className={`text-sm font-medium mb-1.5 ${
-                    !day.isCurrentMonth ? 'text-gray-400' : isToday ? 'text-blue-600 font-bold' : 'text-gray-900'
+                    !day.isCurrentMonth ? 'text-gray-400' : 
+                    isBlocked ? 'text-red-700 font-semibold' :
+                    isWeekend ? 'text-gray-500' :
+                    isToday ? 'text-blue-600 font-bold' : 'text-gray-900'
                   }`}>
                     {day.date.getDate()}
-                    {isToday && (
+                    {isToday && !isBlocked && (
                       <span className="ml-1.5 w-1.5 h-1.5 bg-blue-600 rounded-full inline-block"></span>
+                    )}
+                    {isBlocked && blockedInfo && (
+                      <span className="ml-1 text-xs text-red-600" title={blockedInfo.isHoliday ? `Holiday: ${blockedInfo.reason}` : `Blocked: ${blockedInfo.reason}`}>
+                        {blockedInfo.isHoliday ? '🎉' : '🚫'}
+                      </span>
                     )}
                   </div>
                   <div className="space-y-1">

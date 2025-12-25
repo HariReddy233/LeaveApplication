@@ -58,7 +58,13 @@ export const EmailApprovalService = async (Request) => {
   
   // Verify the approver email matches
   const approverResult = await database.query(
-    `SELECT u.user_id, u.email, u.role, e.employee_id
+    `SELECT u.user_id, u.email, u.role, e.employee_id,
+            COALESCE(
+              NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+              u.first_name,
+              u.last_name,
+              u.email
+            ) as full_name
      FROM users u
      LEFT JOIN employees e ON e.user_id = u.user_id
      WHERE LOWER(u.email) = $1`,
@@ -103,10 +109,15 @@ export const EmailApprovalService = async (Request) => {
     result = await ApproveLeaveAdminService(approvalRequest);
   }
   
+  // Get approver name for the success message
+  const approverName = approver.full_name || approver.email;
+  
   return {
-    message: `Leave request has been ${status.toLowerCase()} successfully via email`,
+    message: `Leave request has been ${status.toLowerCase()} successfully by ${approverName}`,
     leave: result,
-    tokenUsed: true
+    tokenUsed: true,
+    approverName: approverName,
+    action: status
   };
 };
 
