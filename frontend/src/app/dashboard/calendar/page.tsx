@@ -72,13 +72,25 @@ export default function CalendarPage() {
       });
       
       // Check if this day is blocked (holiday or employee-specific) and get details
-      const dayDateStr = day.date.toISOString().split('T')[0];
+      // Use local date string (YYYY-MM-DD) to avoid timezone shift issues
+      const dayDateStr = `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
       let blockedInfo = null;
       const blockedDateMatch = blockedDates.find(blocked => {
         // Handle both organization holidays (holiday_date) and employee blocked dates (blocked_date)
         const blockedDate = blocked.holiday_date || blocked.blocked_date;
         if (!blockedDate) return false;
-        const blockedDateStr = new Date(blockedDate).toISOString().split('T')[0];
+        
+        // Parse date string (YYYY-MM-DD) or Date object, avoiding timezone conversion
+        let blockedDateStr: string;
+        if (typeof blockedDate === 'string') {
+          // If it's already a string in YYYY-MM-DD format, use it directly
+          blockedDateStr = blockedDate.split('T')[0]; // Remove time part if present
+        } else {
+          // If it's a Date object, use local date components (not UTC)
+          const blockedDateObj = new Date(blockedDate);
+          blockedDateStr = `${blockedDateObj.getFullYear()}-${String(blockedDateObj.getMonth() + 1).padStart(2, '0')}-${String(blockedDateObj.getDate()).padStart(2, '0')}`;
+        }
+        
         return blockedDateStr === dayDateStr;
       });
       

@@ -200,9 +200,10 @@ export const GetBlockedDatesService = async (Request) => {
   );
   
   // Get organization-wide holidays (All Teams) - visible to everyone
+  // Format dates as YYYY-MM-DD strings to avoid timezone issues
   const currentYear = new Date().getFullYear();
   const orgHolidays = await database.query(
-    `SELECT holiday_date as blocked_date, holiday_name as reason, 'organization_holiday' as type
+    `SELECT TO_CHAR(holiday_date, 'YYYY-MM-DD') as blocked_date, holiday_name as reason, 'organization_holiday' as type
      FROM organization_holidays
      WHERE (is_recurring = true AND (recurring_year IS NULL OR recurring_year = $1))
         OR (is_recurring = false AND EXTRACT(YEAR FROM holiday_date) = $1)
@@ -211,10 +212,11 @@ export const GetBlockedDatesService = async (Request) => {
   );
   
   // Get country-specific holidays ONLY if user has a matching location
+  // Format dates as YYYY-MM-DD strings to avoid timezone issues
   let countryHolidays = { rows: [] };
   if (userLocation && (userLocation === 'US' || userLocation === 'IN')) {
     countryHolidays = await database.query(
-      `SELECT holiday_date as blocked_date, holiday_name as reason, 'country_holiday' as type
+      `SELECT TO_CHAR(holiday_date, 'YYYY-MM-DD') as blocked_date, holiday_name as reason, 'country_holiday' as type
        FROM holidays
        WHERE country_code = $1 AND is_active = true
        ORDER BY holiday_date ASC`,
@@ -223,8 +225,9 @@ export const GetBlockedDatesService = async (Request) => {
   }
   
   // Get employee-specific blocked dates from employee_blocked_dates table
+  // Format dates as YYYY-MM-DD strings to avoid timezone issues
   const empBlockedDates = await database.query(
-    `SELECT blocked_date, reason, 'employee_blocked' as type
+    `SELECT TO_CHAR(blocked_date, 'YYYY-MM-DD') as blocked_date, reason, 'employee_blocked' as type
      FROM employee_blocked_dates
      WHERE employee_id = $1
      ORDER BY blocked_date ASC`,
@@ -298,8 +301,9 @@ export const GetAllBlockedDatesForCalendarService = async (Request) => {
   }
   
   // Get organization holidays (All Teams) - these are visible to everyone
+  // Format dates as YYYY-MM-DD strings to avoid timezone issues
   let orgHolidaysQuery = `
-    SELECT holiday_date as blocked_date, holiday_name as reason, 'organization_holiday' as type, NULL as employee_id
+    SELECT TO_CHAR(holiday_date, 'YYYY-MM-DD') as blocked_date, holiday_name as reason, 'organization_holiday' as type, NULL as employee_id
     FROM organization_holidays
     WHERE 1=1
   `;
@@ -325,10 +329,11 @@ export const GetAllBlockedDatesForCalendarService = async (Request) => {
   
   // Get country-specific holidays ONLY if user has a matching location
   // Show holidays where country_code matches user's location (US or IN)
+  // Format dates as YYYY-MM-DD strings to avoid timezone issues
   let countryHolidays = { rows: [] };
   if (userLocation && (userLocation === 'US' || userLocation === 'IN')) {
     let countryHolidaysQuery = `
-      SELECT holiday_date as blocked_date, holiday_name as reason, 'country_holiday' as type, NULL as employee_id
+      SELECT TO_CHAR(holiday_date, 'YYYY-MM-DD') as blocked_date, holiday_name as reason, 'country_holiday' as type, NULL as employee_id
       FROM holidays
       WHERE country_code = $1 AND is_active = true
     `;
@@ -343,10 +348,11 @@ export const GetAllBlockedDatesForCalendarService = async (Request) => {
   }
   
   // Get employee-specific blocked dates if employee_id provided
+  // Format dates as YYYY-MM-DD strings to avoid timezone issues
   let employeeBlocked = { rows: [] };
   if (employee_id) {
     let empQuery = `
-      SELECT blocked_date, reason, 'employee_blocked' as type, employee_id
+      SELECT TO_CHAR(blocked_date, 'YYYY-MM-DD') as blocked_date, reason, 'employee_blocked' as type, employee_id
       FROM employee_blocked_dates
       WHERE employee_id = $1
     `;

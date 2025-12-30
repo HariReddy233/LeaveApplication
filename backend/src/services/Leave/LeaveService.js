@@ -114,7 +114,7 @@ export const CreateLeaveService = async (Request) => {
     [empId, dateStrings]
   );
   
-  // Combine blocked dates
+  // Combine blocked dates (holidays and employee-specific)
   const blockedDates = [
     ...orgHolidaysCheck.rows.map(r => ({ date: r.holiday_date, reason: r.holiday_name, type: 'organization_holiday' })),
     ...countryHolidaysCheck.rows.map(r => ({ date: r.holiday_date, reason: r.holiday_name, type: 'country_holiday' })),
@@ -130,14 +130,30 @@ export const CreateLeaveService = async (Request) => {
     );
   }
 
-  // Calculate number of days excluding weekends (country-specific)
-  let numDays = number_of_days;
-  if (!numDays) {
-    numDays = calculateDaysExcludingWeekends(start_date, end_date, userCountryCode);
-  } else {
-    // If number_of_days is provided, recalculate to exclude weekends for accurate balance check
-    numDays = calculateDaysExcludingWeekends(start_date, end_date, userCountryCode);
+  // Calculate number of days excluding weekends AND holidays
+  // Get all blocked date strings for exclusion
+  const blockedDateStrings = [
+    ...orgHolidaysCheck.rows.map(r => formatDateString(r.holiday_date)),
+    ...countryHolidaysCheck.rows.map(r => formatDateString(r.holiday_date)),
+    ...empBlockedCheck.rows.map(r => formatDateString(r.blocked_date))
+  ];
+  
+  // Count working days (exclude weekends and holidays)
+  let workingDays = 0;
+  for (const date of datesInRange) {
+    const dateStr = formatDateString(date);
+    const dayOfWeek = date.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday = 0, Saturday = 6
+    const isHoliday = blockedDateStrings.includes(dateStr);
+    
+    // Count only working days (not weekends, not holidays)
+    if (!isWeekend && !isHoliday) {
+      workingDays++;
+    }
   }
+  
+  // Use calculated working days (excludes weekends and holidays)
+  const numDays = workingDays;
 
   // Check for overlapping leave dates (only for pending or approved leaves)
   const overlapCheck = await database.query(
