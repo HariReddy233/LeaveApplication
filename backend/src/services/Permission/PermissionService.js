@@ -3,11 +3,95 @@ import database from "../../config/database.js";
 import { CreateError } from "../../helper/ErrorHandler.js";
 
 /**
+ * Initialize Required Permissions
+ * Dynamically creates permissions if they don't exist
+ * This ensures all required permissions are available without manual SQL scripts
+ */
+export const InitializeRequiredPermissionsService = async () => {
+  try {
+    console.log('🔄 Initializing required permissions...');
+    
+    // Define all required permissions
+    const requiredPermissions = [
+      {
+        permission_key: 'leave.update_list',
+        permission_name: 'Update Leave List',
+        description: 'Allow user to update organization leave dates and blocked dates',
+        category: 'leave',
+        is_active: true
+      },
+      // Add more permissions here as needed in the future
+    ];
+    
+    let createdCount = 0;
+    let updatedCount = 0;
+    
+    for (const perm of requiredPermissions) {
+      try {
+        // Check if permission exists
+        const existing = await database.query(
+          'SELECT permission_id, permission_key FROM permissions WHERE permission_key = $1',
+          [perm.permission_key]
+        );
+        
+        if (existing.rows.length === 0) {
+          // Create new permission
+          await database.query(
+            `INSERT INTO permissions (permission_key, permission_name, description, category, is_active)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [perm.permission_key, perm.permission_name, perm.description, perm.category, perm.is_active]
+          );
+          console.log(`✅ Created permission: ${perm.permission_key}`);
+          createdCount++;
+        } else {
+          // Update existing permission to ensure it's correct
+          await database.query(
+            `UPDATE permissions 
+             SET permission_name = $1, 
+                 description = $2, 
+                 category = $3, 
+                 is_active = $4,
+                 updated_at = NOW()
+             WHERE permission_key = $5`,
+            [perm.permission_name, perm.description, perm.category, perm.is_active, perm.permission_key]
+          );
+          console.log(`🔄 Updated permission: ${perm.permission_key}`);
+          updatedCount++;
+        }
+      } catch (error) {
+        console.error(`❌ Error initializing permission ${perm.permission_key}:`, error.message);
+        // Continue with other permissions even if one fails
+      }
+    }
+    
+    console.log(`✅ Permission initialization complete. Created: ${createdCount}, Updated: ${updatedCount}`);
+    return {
+      created: createdCount,
+      updated: updatedCount,
+      total: requiredPermissions.length
+    };
+  } catch (error) {
+    console.error('❌ Error initializing permissions:', error);
+    throw CreateError("Failed to initialize permissions", 500);
+  }
+};
+
+/**
  * Get All Permissions
  * Returns list of all available permissions
+ * Automatically ensures required permissions exist before returning
  */
 export const GetAllPermissionsService = async () => {
   try {
+    // Ensure required permissions exist (dynamic initialization)
+    // This ensures permissions are always available even if server startup init failed
+    try {
+      await InitializeRequiredPermissionsService();
+    } catch (initError) {
+      // Log but don't fail - continue to fetch existing permissions
+      console.warn('⚠️ Could not initialize permissions in GetAllPermissionsService:', initError.message);
+    }
+    
     const result = await database.query(
       `SELECT permission_id, permission_key, permission_name, description, category, is_active
        FROM permissions

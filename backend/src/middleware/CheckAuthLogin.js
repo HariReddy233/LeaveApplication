@@ -96,10 +96,13 @@ export const CheckHodAuth = async (req, res, next) => {
       req.Roles = Role;
       next();
     } else {
-      throw CreateError("Invalid Credentials - HOD access required", 401);
+      // User is authenticated but doesn't have HOD role - return 403 (Forbidden), not 401 (Unauthorized)
+      throw CreateError("Access denied - HOD access required", 403);
     }
   } catch (error) {
-    res.status(error.status || 401).json({ message: error.message || "Invalid Credentials" });
+    // Use error.status if set, otherwise default to 403 for role-based access denial
+    const statusCode = error.status || (error.message?.includes('Access denied') ? 403 : 401);
+    res.status(statusCode).json({ message: error.message || "Access denied" });
   }
 };
 
@@ -121,10 +124,13 @@ export const CheckAdminAuth = async (req, res, next) => {
       req.Roles = Role;
       next();
     } else {
-      throw CreateError("Invalid Credentials - Admin access required", 401);
+      // User is authenticated but doesn't have Admin role - return 403 (Forbidden), not 401 (Unauthorized)
+      throw CreateError("Access denied - Admin access required", 403);
     }
   } catch (error) {
-    res.status(error.status || 401).json({ message: error.message || "Invalid Credentials" });
+    // Use error.status if set, otherwise default to 403 for role-based access denial
+    const statusCode = error.status || (error.message?.includes('Access denied') ? 403 : 401);
+    res.status(statusCode).json({ message: error.message || "Access denied" });
   }
 };
 

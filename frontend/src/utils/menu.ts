@@ -205,7 +205,8 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
     }
 
     // Update Leave List (Organization Holidays & Blocked Dates)
-    if (can(PermissionKeys.CALENDAR_BLOCK_DATES)) {
+    // Admin always has access, HOD needs leave.update_list permission
+    if (role === 'admin' || can(PermissionKeys.LEAVE_UPDATE_LIST)) {
       menuItems.push({
         key: 'UpdateLeaveList',
         label: 'Update Leave List',
@@ -377,7 +378,8 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
     }
 
     // Update Leave List (Organization Holidays & Blocked Dates) - HOD with permission
-    if (can(PermissionKeys.CALENDAR_BLOCK_DATES)) {
+    // HOD needs leave.update_list permission to see this menu item
+    if (can(PermissionKeys.LEAVE_UPDATE_LIST)) {
       hodMenuItems.push({
         key: 'UpdateLeaveList',
         label: 'Update Leave List',

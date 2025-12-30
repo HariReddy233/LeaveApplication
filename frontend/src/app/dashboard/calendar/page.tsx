@@ -86,7 +86,7 @@ export default function CalendarPage() {
         blockedInfo = {
           type: blockedDateMatch.type || 'blocked',
           reason: blockedDateMatch.reason || blockedDateMatch.holiday_name || 'Blocked Date',
-          isHoliday: blockedDateMatch.type === 'organization_holiday'
+          isHoliday: blockedDateMatch.type === 'organization_holiday' || blockedDateMatch.type === 'country_holiday'
         };
       }
       
@@ -358,7 +358,8 @@ export default function CalendarPage() {
               let tooltipText = '';
               if (isBlocked && blockedInfo) {
                 if (blockedInfo.isHoliday) {
-                  tooltipText = `Organization Holiday: ${blockedInfo.reason}`;
+                  const holidayType = blockedInfo.type === 'country_holiday' ? 'Holiday' : 'Organization Holiday';
+                  tooltipText = `${holidayType}: ${blockedInfo.reason}`;
                 } else {
                   tooltipText = `Blocked Date: ${blockedInfo.reason || 'No reason provided'}`;
                 }

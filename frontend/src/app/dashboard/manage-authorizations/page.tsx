@@ -50,9 +50,18 @@ export default function ManageAuthorizationsPage() {
           router.push('/dashboard');
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to fetch user role:', error);
-      router.push('/login');
+      // Only redirect on 401 (unauthorized) - not on 403 (forbidden)
+      if (error.response?.status === 401) {
+        router.push('/login');
+      } else if (error.response?.status === 403) {
+        // 403 = Permission denied - redirect to dashboard instead of login
+        router.push('/dashboard');
+      } else {
+        // For other errors, redirect to login only if it's an auth issue
+        router.push('/login');
+      }
     }
   };
 
@@ -77,8 +86,14 @@ export default function ManageAuthorizationsPage() {
       }
     } catch (error: any) {
       console.error('Failed to fetch permissions data:', error);
-      if (error.response?.status === 401 || error.response?.status === 403) {
+      // Only redirect on 401 (unauthorized) - not on 403 (forbidden)
+      // 403 means user doesn't have permission, but they're still authenticated
+      if (error.response?.status === 401) {
         router.push('/login');
+      } else if (error.response?.status === 403) {
+        // 403 = Permission denied - show error but don't redirect
+        console.warn('Access denied to permissions data (403)');
+        // Don't redirect - just show access denied message
       }
     } finally {
       setLoading(false);

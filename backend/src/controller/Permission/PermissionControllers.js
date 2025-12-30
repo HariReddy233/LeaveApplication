@@ -6,7 +6,8 @@ import {
   AssignPermissionService,
   RevokePermissionService,
   BulkAssignPermissionsService,
-  GetUserPermissionKeysService
+  GetUserPermissionKeysService,
+  InitializeRequiredPermissionsService
 } from "../../services/Permission/PermissionService.js";
 
 /**
@@ -118,6 +119,24 @@ export const GetMyPermissions = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Initialize Required Permissions (Admin only)
+ * @access private (Admin only)
+ * @route /api/v1/Permission/InitializePermissions
+ * @method POST
+ */
+export const InitializePermissions = async (req, res, next) => {
+  try {
+    const result = await InitializeRequiredPermissionsService();
+    res.json({
+      message: "Permissions initialized successfully",
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   GetAllPermissions,
   GetUserPermissions,
@@ -125,7 +144,8 @@ export default {
   AssignPermission,
   RevokePermission,
   BulkAssignPermissions,
-  GetMyPermissions
+  GetMyPermissions,
+  InitializePermissions
 };
 
 

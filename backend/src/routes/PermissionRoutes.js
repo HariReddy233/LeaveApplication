@@ -68,6 +68,14 @@ PermissionRoutes.get(
   PermissionControllers.GetMyPermissions,
 );
 
+//Initialize Required Permissions (Admin only - for manual trigger)
+PermissionRoutes.post(
+  "/InitializePermissions",
+  CheckEmployeeAuth,
+  CheckAdminAuth,
+  PermissionControllers.InitializePermissions,
+);
+
 export default PermissionRoutes;
 
 

@@ -138,10 +138,57 @@ export const BlockCalendarDatesService = async (Request) => {
 
 /**
  * Get Blocked Dates (includes organization holidays and employee-specific blocked dates)
+ * Filters holidays based on user's location (country/team)
  */
 export const GetBlockedDatesService = async (Request) => {
   const { employee_id } = Request.query;
   const userId = employee_id || Request.EmployeeId || Request.UserId;
+  
+  // Get user's location (from employees.location, fallback to users.country_code)
+  let userLocation = null;
+  if (userId) {
+    try {
+      // First try to get location from employees table (primary source)
+      const empResult = await database.query(
+        `SELECT e.location, u.country_code 
+         FROM employees e
+         JOIN users u ON e.user_id = u.user_id
+         WHERE e.user_id = $1
+         LIMIT 1`,
+        [userId]
+      );
+      
+      if (empResult.rows.length > 0) {
+        // Use employees.location as primary source, fallback to users.country_code
+        userLocation = empResult.rows[0].location || empResult.rows[0].country_code;
+      } else {
+        // If no employee record, try users table directly
+        const userResult = await database.query(
+          `SELECT country_code FROM users WHERE user_id = $1 LIMIT 1`,
+          [userId]
+        );
+        if (userResult.rows.length > 0) {
+          userLocation = userResult.rows[0].country_code;
+        }
+      }
+      
+      // Normalize location to 'US' or 'IN' if needed
+      if (userLocation) {
+        const locationUpper = String(userLocation).toUpperCase().trim();
+        if (locationUpper === 'US' || locationUpper === 'UNITED STATES') {
+          userLocation = 'US';
+        } else if (locationUpper === 'IN' || locationUpper === 'INDIA') {
+          userLocation = 'IN';
+        } else {
+          // If location doesn't match US/IN, set to null
+          userLocation = null;
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch user location:', err.message);
+      userLocation = null;
+    }
+  }
   
   // Get employee-specific blocked dates
   const employeeBlocked = await database.query(
@@ -152,7 +199,7 @@ export const GetBlockedDatesService = async (Request) => {
     [userId]
   );
   
-  // Get organization-wide holidays (for current year and recurring)
+  // Get organization-wide holidays (All Teams) - visible to everyone
   const currentYear = new Date().getFullYear();
   const orgHolidays = await database.query(
     `SELECT holiday_date as blocked_date, holiday_name as reason, 'organization_holiday' as type
@@ -163,6 +210,18 @@ export const GetBlockedDatesService = async (Request) => {
     [currentYear]
   );
   
+  // Get country-specific holidays ONLY if user has a matching location
+  let countryHolidays = { rows: [] };
+  if (userLocation && (userLocation === 'US' || userLocation === 'IN')) {
+    countryHolidays = await database.query(
+      `SELECT holiday_date as blocked_date, holiday_name as reason, 'country_holiday' as type
+       FROM holidays
+       WHERE country_code = $1 AND is_active = true
+       ORDER BY holiday_date ASC`,
+      [userLocation]
+    ).catch(() => ({ rows: [] }));
+  }
+  
   // Get employee-specific blocked dates from employee_blocked_dates table
   const empBlockedDates = await database.query(
     `SELECT blocked_date, reason, 'employee_blocked' as type
@@ -172,10 +231,11 @@ export const GetBlockedDatesService = async (Request) => {
     [userId]
   );
   
-  // Combine all blocked dates
+  // Combine all blocked dates: organization holidays (All Teams) + country holidays (matching user) + employee blocked
   const allBlocked = [
     ...employeeBlocked.rows,
     ...orgHolidays.rows,
+    ...countryHolidays.rows,
     ...empBlockedDates.rows
   ];
   
@@ -183,12 +243,61 @@ export const GetBlockedDatesService = async (Request) => {
 };
 
 /**
- * Get All Blocked Dates for Calendar (organization holidays + employee-specific)
+ * Get All Blocked Dates for Calendar (organization holidays + country-specific holidays + employee-specific)
  * Used by calendar view to show blocked dates
  */
 export const GetAllBlockedDatesForCalendarService = async (Request) => {
   const { start_date, end_date, employee_id } = Request.query;
+  const userId = Request.UserId;
   
+  // Get user's location (from employees.location, fallback to users.country_code)
+  // This determines which country-specific holidays to show
+  let userLocation = null;
+  if (userId) {
+    try {
+      // First try to get location from employees table (primary source)
+      const empResult = await database.query(
+        `SELECT e.location, u.country_code 
+         FROM employees e
+         JOIN users u ON e.user_id = u.user_id
+         WHERE e.user_id = $1
+         LIMIT 1`,
+        [userId]
+      );
+      
+      if (empResult.rows.length > 0) {
+        // Use employees.location as primary source, fallback to users.country_code
+        userLocation = empResult.rows[0].location || empResult.rows[0].country_code;
+      } else {
+        // If no employee record, try users table directly
+        const userResult = await database.query(
+          `SELECT country_code FROM users WHERE user_id = $1 LIMIT 1`,
+          [userId]
+        );
+        if (userResult.rows.length > 0) {
+          userLocation = userResult.rows[0].country_code;
+        }
+      }
+      
+      // Normalize location to 'US' or 'IN' if needed
+      if (userLocation) {
+        const locationUpper = String(userLocation).toUpperCase().trim();
+        if (locationUpper === 'US' || locationUpper === 'UNITED STATES') {
+          userLocation = 'US';
+        } else if (locationUpper === 'IN' || locationUpper === 'INDIA') {
+          userLocation = 'IN';
+        } else {
+          // If location doesn't match US/IN, set to null (user won't see country-specific holidays)
+          userLocation = null;
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch user location:', err.message);
+      userLocation = null;
+    }
+  }
+  
+  // Get organization holidays (All Teams) - these are visible to everyone
   let orgHolidaysQuery = `
     SELECT holiday_date as blocked_date, holiday_name as reason, 'organization_holiday' as type, NULL as employee_id
     FROM organization_holidays
@@ -214,33 +323,54 @@ export const GetAllBlockedDatesForCalendarService = async (Request) => {
   
   const orgHolidays = await database.query(orgHolidaysQuery, params);
   
+  // Get country-specific holidays ONLY if user has a matching location
+  // Show holidays where country_code matches user's location (US or IN)
+  let countryHolidays = { rows: [] };
+  if (userLocation && (userLocation === 'US' || userLocation === 'IN')) {
+    let countryHolidaysQuery = `
+      SELECT holiday_date as blocked_date, holiday_name as reason, 'country_holiday' as type, NULL as employee_id
+      FROM holidays
+      WHERE country_code = $1 AND is_active = true
+    `;
+    const countryParams = [userLocation];
+    
+    if (start_date && end_date) {
+      countryHolidaysQuery += ` AND holiday_date BETWEEN $2 AND $3`;
+      countryParams.push(start_date, end_date);
+    }
+    
+    countryHolidays = await database.query(countryHolidaysQuery, countryParams).catch(() => ({ rows: [] }));
+  }
+  
   // Get employee-specific blocked dates if employee_id provided
   let employeeBlocked = { rows: [] };
   if (employee_id) {
     let empQuery = `
       SELECT blocked_date, reason, 'employee_blocked' as type, employee_id
       FROM employee_blocked_dates
-      WHERE employee_id = $${paramCount}
+      WHERE employee_id = $1
     `;
     const empParams = [employee_id];
     
     if (start_date && end_date) {
-      empQuery += ` AND blocked_date BETWEEN $${paramCount + 1} AND $${paramCount + 2}`;
+      empQuery += ` AND blocked_date BETWEEN $2 AND $3`;
       empParams.push(start_date, end_date);
     }
     
     employeeBlocked = await database.query(empQuery, empParams);
   }
   
-  // Combine results
-  return [...orgHolidays.rows, ...employeeBlocked.rows];
+  // Combine results: organization holidays + country holidays + employee blocked dates
+  return [...orgHolidays.rows, ...countryHolidays.rows, ...employeeBlocked.rows];
 };
 
 /**
- * Create Organization Holiday
+ * Create Organization Holiday or Country-Specific Holiday
+ * If team is 'all' -> creates organization holiday (all users)
+ * If team is 'US' or 'IN' -> creates country-specific holiday
  */
 export const CreateOrganizationHolidayService = async (Request) => {
-  const { holiday_name, holiday_date, is_recurring, recurring_year } = Request.body;
+  const { holiday_name, holiday_date, is_recurring, recurring_year, team } = Request.body;
   
   if (!holiday_name || !holiday_date) {
     throw CreateError("Holiday name and date are required", 400);
@@ -252,8 +382,25 @@ export const CreateOrganizationHolidayService = async (Request) => {
     throw CreateError("Invalid date format", 400);
   }
   
+  // Validate team parameter
+  const teamValue = team || 'all';
+  if (!['all', 'US', 'IN'].includes(teamValue)) {
+    throw CreateError("Invalid team value. Must be 'all', 'US', or 'IN'", 400);
+  }
+  
   // Auto-create tables if they don't exist (for local and server compatibility)
   try {
+    // Add country_code column to users table if it doesn't exist
+    await database.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                      WHERE table_name = 'users' AND column_name = 'country_code') THEN
+          ALTER TABLE users ADD COLUMN country_code VARCHAR(10);
+        END IF;
+      END $$;
+    `).catch(() => {}); // Ignore if column already exists
+    
     await database.query(`
       CREATE TABLE IF NOT EXISTS organization_holidays (
         id SERIAL PRIMARY KEY,
@@ -265,6 +412,20 @@ export const CreateOrganizationHolidayService = async (Request) => {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(holiday_date, recurring_year)
+      )
+    `).catch(() => {}); // Ignore if table already exists
+    
+    // Create country-specific holidays table
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS holidays (
+        id SERIAL PRIMARY KEY,
+        country_code VARCHAR(10) NOT NULL,
+        holiday_date DATE NOT NULL,
+        holiday_name VARCHAR(255) NOT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(country_code, holiday_date)
       )
     `).catch(() => {}); // Ignore if table already exists
     
@@ -295,6 +456,9 @@ export const CreateOrganizationHolidayService = async (Request) => {
     // Create indexes if they don't exist
     await database.query(`CREATE INDEX IF NOT EXISTS idx_org_holidays_date ON organization_holidays(holiday_date)`).catch(() => {});
     await database.query(`CREATE INDEX IF NOT EXISTS idx_org_holidays_recurring ON organization_holidays(is_recurring, recurring_year)`).catch(() => {});
+    await database.query(`CREATE INDEX IF NOT EXISTS idx_holidays_country ON holidays(country_code)`).catch(() => {});
+    await database.query(`CREATE INDEX IF NOT EXISTS idx_holidays_date ON holidays(holiday_date)`).catch(() => {});
+    await database.query(`CREATE INDEX IF NOT EXISTS idx_users_country_code ON users(country_code)`).catch(() => {});
     await database.query(`CREATE INDEX IF NOT EXISTS idx_employee_blocked_dates_employee ON employee_blocked_dates(employee_id)`).catch(() => {});
     await database.query(`CREATE INDEX IF NOT EXISTS idx_employee_blocked_dates_date ON employee_blocked_dates(blocked_date)`).catch(() => {});
     await database.query(`CREATE INDEX IF NOT EXISTS idx_holiday_notifications_date ON holiday_notifications(notification_date)`).catch(() => {});
@@ -303,47 +467,248 @@ export const CreateOrganizationHolidayService = async (Request) => {
     // Continue anyway - tables might already exist
   }
   
+  // If team is 'all', create organization holiday (for all users)
+  if (teamValue === 'all') {
+    const result = await database.query(
+      `INSERT INTO organization_holidays (holiday_name, holiday_date, is_recurring, recurring_year, created_by)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (holiday_date, recurring_year) DO UPDATE
+       SET holiday_name = EXCLUDED.holiday_name,
+           is_recurring = EXCLUDED.is_recurring,
+           updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [holiday_name, holiday_date, is_recurring || false, recurring_year || null, Request.UserId]
+    );
+    
+    return { ...result.rows[0], team: 'all', type: 'organization_holiday' };
+  }
+  
+  // If team is 'US' or 'IN', create country-specific holiday
+  const countryCode = teamValue; // 'US' or 'IN'
   const result = await database.query(
-    `INSERT INTO organization_holidays (holiday_name, holiday_date, is_recurring, recurring_year, created_by)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (holiday_date, recurring_year) DO UPDATE
+    `INSERT INTO holidays (country_code, holiday_date, holiday_name, is_active)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (country_code, holiday_date) DO UPDATE
      SET holiday_name = EXCLUDED.holiday_name,
-         is_recurring = EXCLUDED.is_recurring,
+         is_active = EXCLUDED.is_active,
          updated_at = CURRENT_TIMESTAMP
      RETURNING *`,
-    [holiday_name, holiday_date, is_recurring || false, recurring_year || null, Request.UserId]
+    [countryCode, holiday_date, holiday_name, true]
   );
   
-  return result.rows[0];
+  return { ...result.rows[0], team: countryCode, type: 'country_holiday' };
 };
 
 /**
- * Get All Organization Holidays
+ * Bulk Create Organization Holidays
+ * Accepts array of holidays and inserts them in a transaction
+ */
+export const BulkCreateOrganizationHolidaysService = async (Request) => {
+  const { holidays } = Request.body;
+  
+  if (!Array.isArray(holidays) || holidays.length === 0) {
+    throw CreateError('Holidays array is required and must not be empty', 400);
+  }
+  
+  // Validate all holidays before starting transaction
+  const validationErrors = [];
+  const dateMap = new Map(); // Track dates per team to detect duplicates
+  
+  holidays.forEach((holiday, index) => {
+    const errors = [];
+    
+    if (!holiday.holiday_name || holiday.holiday_name.trim() === '') {
+      errors.push('Holiday name is required');
+    }
+    
+    if (!holiday.holiday_date) {
+      errors.push('Holiday date is required');
+    } else {
+      // Validate date format
+      const date = new Date(holiday.holiday_date);
+      if (isNaN(date.getTime())) {
+        errors.push('Invalid date format');
+      }
+    }
+    
+    if (!holiday.team || !['all', 'US', 'IN'].includes(holiday.team)) {
+      errors.push('Team must be "all", "US", or "IN"');
+    }
+    
+    if (errors.length > 0) {
+      validationErrors.push(`Row ${index + 1}: ${errors.join(', ')}`);
+    }
+    
+    // Check for duplicate dates for same team
+    if (holiday.holiday_date && holiday.team) {
+      const key = `${holiday.team}_${holiday.holiday_date}`;
+      if (dateMap.has(key)) {
+        validationErrors.push(`Row ${index + 1}: Duplicate date ${holiday.holiday_date} for team ${holiday.team}`);
+      } else {
+        dateMap.set(key, true);
+      }
+    }
+  });
+  
+  if (validationErrors.length > 0) {
+    throw CreateError(`Validation failed: ${validationErrors.join('; ')}`, 400);
+  }
+  
+  // Ensure tables exist before starting transaction
+  try {
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS organization_holidays (
+        id SERIAL PRIMARY KEY,
+        holiday_name VARCHAR(255) NOT NULL,
+        holiday_date DATE NOT NULL,
+        is_recurring BOOLEAN DEFAULT FALSE,
+        recurring_year INTEGER NULL,
+        created_by INTEGER NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(holiday_date, recurring_year)
+      )
+    `).catch(() => {});
+    
+    await database.query(`
+      CREATE TABLE IF NOT EXISTS holidays (
+        id SERIAL PRIMARY KEY,
+        country_code VARCHAR(10) NOT NULL,
+        holiday_date DATE NOT NULL,
+        holiday_name VARCHAR(255) NOT NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(country_code, holiday_date)
+      )
+    `).catch(() => {});
+  } catch (tableError) {
+    console.warn('Warning: Could not ensure holiday tables exist:', tableError.message);
+    // Continue anyway - tables might already exist
+  }
+  
+  // Start transaction
+  const client = await database.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const results = [];
+    
+    for (const holiday of holidays) {
+      const {
+        holiday_name,
+        holiday_date,
+        team,
+        description = null,
+        is_recurring = false,
+        recurring_year = null
+      } = holiday;
+      
+      const teamValue = team === 'all' ? 'all' : (team === 'US' ? 'US' : 'IN');
+      
+      // If team is 'all', create organization holiday
+      if (teamValue === 'all') {
+        const result = await client.query(
+          `INSERT INTO organization_holidays (holiday_name, holiday_date, is_recurring, recurring_year, created_by)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (holiday_date, recurring_year) DO UPDATE
+           SET holiday_name = EXCLUDED.holiday_name,
+               is_recurring = EXCLUDED.is_recurring,
+               updated_at = CURRENT_TIMESTAMP
+           RETURNING *`,
+          [holiday_name, holiday_date, is_recurring || false, recurring_year || null, Request.UserId]
+        );
+        
+        results.push({ ...result.rows[0], team: 'all', type: 'organization_holiday' });
+      } else {
+        // If team is 'US' or 'IN', create country-specific holiday
+        const countryCode = teamValue;
+        const result = await client.query(
+          `INSERT INTO holidays (country_code, holiday_date, holiday_name, is_active)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (country_code, holiday_date) DO UPDATE
+           SET holiday_name = EXCLUDED.holiday_name,
+               is_active = EXCLUDED.is_active,
+               updated_at = CURRENT_TIMESTAMP
+           RETURNING *`,
+          [countryCode, holiday_date, holiday_name, true]
+        );
+        
+        results.push({ ...result.rows[0], team: countryCode, type: 'country_holiday' });
+      }
+    }
+    
+    await client.query('COMMIT');
+    
+    return {
+      message: `Successfully created ${results.length} holiday(s)`,
+      count: results.length,
+      data: results
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw CreateError(
+      error.message || 'Failed to create bulk holidays',
+      error.statusCode || 500
+    );
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Get All Organization Holidays and Country-Specific Holidays
  */
 export const GetOrganizationHolidaysService = async (Request) => {
   const { year, start_date, end_date } = Request.query;
   
-  let query = `SELECT * FROM organization_holidays WHERE 1=1`;
-  const params = [];
-  let paramCount = 1;
+  // Get organization holidays
+  let orgQuery = `SELECT *, 'all' as team, 'organization_holiday' as type FROM organization_holidays WHERE 1=1`;
+  const orgParams = [];
+  let orgParamCount = 1;
   
   if (year) {
-    query += ` AND (is_recurring = true AND (recurring_year IS NULL OR recurring_year = $${paramCount}))
-               OR (is_recurring = false AND EXTRACT(YEAR FROM holiday_date) = $${paramCount})`;
-    params.push(year);
-    paramCount++;
+    orgQuery += ` AND (is_recurring = true AND (recurring_year IS NULL OR recurring_year = $${orgParamCount}))
+                  OR (is_recurring = false AND EXTRACT(YEAR FROM holiday_date) = $${orgParamCount})`;
+    orgParams.push(year);
+    orgParamCount++;
   }
   
   if (start_date && end_date) {
-    query += ` AND holiday_date BETWEEN $${paramCount} AND $${paramCount + 1}`;
-    params.push(start_date, end_date);
-    paramCount += 2;
+    orgQuery += ` AND holiday_date BETWEEN $${orgParamCount} AND $${orgParamCount + 1}`;
+    orgParams.push(start_date, end_date);
+    orgParamCount += 2;
   }
   
-  query += ` ORDER BY holiday_date ASC`;
+  orgQuery += ` ORDER BY holiday_date ASC`;
   
-  const result = await database.query(query, params);
-  return result.rows;
+  const orgResult = await database.query(orgQuery, orgParams);
+  
+  // Get country-specific holidays
+  let countryQuery = `SELECT id, holiday_date, holiday_name, country_code as team, is_active, 
+                             'country_holiday' as type, NULL as is_recurring, NULL as recurring_year,
+                             created_at, updated_at
+                      FROM holidays WHERE is_active = true`;
+  const countryParams = [];
+  let countryParamCount = 1;
+  
+  if (start_date && end_date) {
+    countryQuery += ` AND holiday_date BETWEEN $${countryParamCount} AND $${countryParamCount + 1}`;
+    countryParams.push(start_date, end_date);
+    countryParamCount += 2;
+  } else if (year) {
+    countryQuery += ` AND EXTRACT(YEAR FROM holiday_date) = $${countryParamCount}`;
+    countryParams.push(year);
+    countryParamCount++;
+  }
+  
+  countryQuery += ` ORDER BY holiday_date ASC`;
+  
+  const countryResult = await database.query(countryQuery, countryParams).catch(() => ({ rows: [] }));
+  
+  // Combine and return both types
+  return [...orgResult.rows, ...countryResult.rows];
 };
 
 /**
@@ -474,6 +839,33 @@ export const DeleteEmployeeBlockedDateService = async (Request) => {
   }
   
   return { message: "Blocked date deleted successfully" };
+};
+
+/**
+ * Delete Country-Specific Holiday
+ */
+export const DeleteCountryHolidayService = async (Request) => {
+  const { id } = Request.params;
+  const { country_code } = Request.query;
+  
+  if (!id) {
+    throw CreateError("Holiday ID is required", 400);
+  }
+  
+  if (!country_code) {
+    throw CreateError("Country code is required", 400);
+  }
+  
+  const result = await database.query(
+    `DELETE FROM holidays WHERE id = $1 AND country_code = $2 RETURNING *`,
+    [id, country_code]
+  );
+  
+  if (result.rows.length === 0) {
+    throw CreateError("Country holiday not found", 404);
+  }
+  
+  return { message: "Country holiday deleted successfully" };
 };
 
 

@@ -52,8 +52,7 @@ export const EmailApprovalService = async (Request) => {
     (tokenRecord.approver_role === 'admin' && leave.admin_status !== 'Pending');
   
   if (isAlreadyProcessed) {
-    const currentStatus = tokenRecord.approver_role === 'hod' ? leave.hod_status : leave.admin_status;
-    throw CreateError(`This leave request has already been ${currentStatus.toLowerCase()}. Status cannot be changed.`, 400);
+    throw CreateError("This leave request has already been processed.", 400);
   }
   
   // Verify the approver email matches

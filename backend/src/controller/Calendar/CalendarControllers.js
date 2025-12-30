@@ -5,12 +5,14 @@ import {
   GetBlockedDatesService,
   GetAllBlockedDatesForCalendarService,
   CreateOrganizationHolidayService,
+  BulkCreateOrganizationHolidaysService,
   GetOrganizationHolidaysService,
   UpdateOrganizationHolidayService,
   DeleteOrganizationHolidayService,
   BlockEmployeeDatesService,
   GetEmployeeBlockedDatesService,
   DeleteEmployeeBlockedDateService,
+  DeleteCountryHolidayService,
 } from "../../services/Calendar/CalendarService.js";
 
 /**
@@ -89,6 +91,21 @@ export const CreateOrganizationHoliday = async (req, res, next) => {
       message: "Organization holiday created successfully",
       data: result,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc Bulk Create Organization Holidays
+ * @access private
+ * @route /api/v1/Calendar/BulkOrganizationHolidays
+ * @method POST
+ */
+export const BulkCreateOrganizationHolidays = async (req, res, next) => {
+  try {
+    const result = await BulkCreateOrganizationHolidaysService(req);
+    res.status(201).json(result);
   } catch (error) {
     next(error);
   }
@@ -190,17 +207,34 @@ export const DeleteEmployeeBlockedDate = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Delete Country-Specific Holiday
+ * @access private
+ * @route /api/v1/Calendar/CountryHoliday/:id?country_code=US
+ * @method DELETE
+ */
+export const DeleteCountryHoliday = async (req, res, next) => {
+  try {
+    const result = await DeleteCountryHolidayService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   CalendarView,
   BlockCalendar,
   BlockedDates,
   AllBlockedDates,
   CreateOrganizationHoliday,
+  BulkCreateOrganizationHolidays,
   GetOrganizationHolidays,
   UpdateOrganizationHoliday,
   DeleteOrganizationHoliday,
   BlockEmployeeDates,
   GetEmployeeBlockedDates,
   DeleteEmployeeBlockedDate,
+  DeleteCountryHoliday,
 };
 

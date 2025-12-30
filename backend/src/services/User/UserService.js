@@ -716,6 +716,8 @@ export const UpdateEmployeeService = async (Request) => {
     }
 
     // Update phone_number in users table
+    // NOTE: Phone number does NOT affect location or country_code
+    // Location is ONLY set from the location dropdown field
     if (phone_number !== undefined) {
       userUpdateQuery += `, phone_number = $${paramCount}`;
       userParams.push(phone_number || null);
@@ -818,11 +820,85 @@ export const UpdateEmployeeService = async (Request) => {
     // They are already handled in the users table update above
     // Do NOT update email, full_name, or role in employees table
 
+    // Track normalized location for logging
+    let normalizedLocation = null;
+    let shouldUpdateLocation = false;
+    
+    // CRITICAL: Location is ONLY set from the location dropdown field
+    // Phone number does NOT affect location or country_code
+    // Check if location is provided (even if null or empty string)
+    // IMPORTANT: Always process location if it's in the request body (even if null or empty string)
     if (location !== undefined) {
+      // Normalize location: Accept IN/US directly, or normalize legacy values
+      // Store ONLY "IN" or "US" in database
+      if (location === null || location === '') {
+        // Explicitly null or empty string - clear location
+        normalizedLocation = null;
+        shouldUpdateLocation = true;
+      } else {
+        const locationStr = String(location).trim();
+        if (locationStr) {
+          const locationUpper = locationStr.toUpperCase();
+          // Accept IN or US directly (from dropdown)
+          if (locationUpper === 'IN' || locationUpper === 'US') {
+            normalizedLocation = locationUpper;
+            shouldUpdateLocation = true;
+          } else {
+            // Normalize legacy values for backward compatibility
+            const locationLower = locationStr.toLowerCase();
+            if (locationLower === 'in' || locationLower.includes('india')) {
+              normalizedLocation = 'IN';
+              shouldUpdateLocation = true;
+            } else if (locationLower === 'us' || locationLower.includes('united states') || locationLower.includes('miami')) {
+              normalizedLocation = 'US';
+              shouldUpdateLocation = true;
+            } else {
+              // If invalid value, set to null but still update
+              normalizedLocation = null;
+              shouldUpdateLocation = true;
+            }
+          }
+        } else {
+          // Empty string after trim - set to null but still update
+          normalizedLocation = null;
+          shouldUpdateLocation = true;
+        }
+      }
+    }
+    
+    // ALWAYS include location in UPDATE query when location field is provided
+    if (shouldUpdateLocation) {
       empUpdateQuery += `, location = $${paramCount}`;
-      empParams.push(location || null);
+      empParams.push(normalizedLocation);
       paramCount++;
       hasOtherFields = true;
+      
+      console.log(`📍 Location update: original="${location}", normalized="${normalizedLocation}"`);
+      
+      // Auto-set country_code based on normalized location ONLY
+      // Phone number does NOT affect this
+      if (normalizedLocation) {
+        try {
+          await database.query(
+            `UPDATE users SET country_code = $1 WHERE user_id = $2`,
+            [normalizedLocation, userId]
+          );
+          console.log(`✅ Auto-set country_code to ${normalizedLocation} for user ${userId} based on location dropdown: ${location} → ${normalizedLocation}`);
+        } catch (countryCodeError) {
+          console.warn('Could not update country_code:', countryCodeError.message);
+        }
+      } else {
+        // If location is being cleared, also clear country_code
+        try {
+          await database.query(
+            `UPDATE users SET country_code = NULL WHERE user_id = $1`,
+            [userId]
+          );
+          console.log(`✅ Cleared country_code for user ${userId} (location was cleared)`);
+        } catch (countryCodeError) {
+          console.warn('Could not clear country_code:', countryCodeError.message);
+        }
+      }
     }
 
     if (department !== undefined) {
@@ -1084,8 +1160,9 @@ export const UpdateEmployeeService = async (Request) => {
     let shouldUpdateAdminId = false;
     let adminEmployeeId = null;
     if (admin_id !== undefined) {
+      // Always update admin_id if it's in the request (even if null or empty)
       shouldUpdateAdminId = true;
-      if (admin_id && admin_id !== '') {
+      if (admin_id && admin_id !== '' && admin_id !== null) {
         // Find Admin's employee_id
         try {
           const adminResult = await database.query(
@@ -1155,59 +1232,149 @@ export const UpdateEmployeeService = async (Request) => {
     console.log(`\n🔵 STEP 3: Executing employees UPDATE query`);
     console.log(`📝 Full UPDATE query: ${empUpdateQuery}`);
     console.log(`📝 Query parameters (${empParams.length}): ${JSON.stringify(empParams)}`);
+    console.log(`📝 Location being updated: ${location || 'NULL/EMPTY'}`);
+    console.log(`📝 Normalized location: ${normalizedLocation || 'NULL'}`);
     console.log(`📝 Employee exists check: ${employeeExists}`);
 
     try {
       const empUpdateResult = await database.query(empUpdateQuery, empParams);
       console.log(`✅ STEP 3 RESULT: Employees table updated. Rows affected: ${empUpdateResult.rowCount}`);
       
-      // If UPDATE affected 0 rows and we need to update manager_id, try direct UPDATE
-      if (empUpdateResult.rowCount === 0 && shouldUpdateManagerId) {
-        console.warn('⚠️ UPDATE affected 0 rows but manager_id needs to be set. Trying direct UPDATE...');
-        try {
-          const directUpdate = await database.query(
-            'UPDATE employees SET manager_id = $1, updated_at = NOW() WHERE user_id = $2',
-            [hodEmployeeId, userId]
-          );
-          console.log(`✅ Direct manager_id UPDATE. Rows affected: ${directUpdate.rowCount}`);
-          if (directUpdate.rowCount > 0) {
-            // Mark as successful
-            employeeExists = true;
-      } else {
-            // If still 0 rows, employee record doesn't exist - create it
-            console.warn('⚠️ Employee record still not found. Creating with manager_id...');
+      // ALWAYS verify location was actually updated (even if normalizedLocation is null)
+      if (location !== undefined && empUpdateResult.rowCount > 0) {
+        const verifyResult = await database.query(
+          'SELECT location FROM employees WHERE user_id = $1',
+          [userId]
+        );
+        if (verifyResult.rows.length > 0) {
+          const savedLocation = verifyResult.rows[0].location;
+          console.log(`✅ VERIFIED: Location in database is now: ${savedLocation} (expected: ${normalizedLocation || 'NULL'})`);
+          if (savedLocation !== normalizedLocation) {
+            console.warn(`⚠️ LOCATION MISMATCH: Expected ${normalizedLocation || 'NULL'}, but got ${savedLocation}. Attempting to fix...`);
+            // Try to fix it with a direct UPDATE
             try {
-              const userInfo = await database.query(
-                'SELECT email, COALESCE(first_name || \' \' || last_name, first_name, last_name, email) as name FROM users WHERE user_id = $1',
+              const fixResult = await database.query(
+                'UPDATE employees SET location = $1, updated_at = NOW() WHERE user_id = $2',
+                [normalizedLocation, userId]
+              );
+              console.log(`🔧 LOCATION FIX: Direct UPDATE executed. Rows affected: ${fixResult.rowCount}`);
+              // Verify again after fix
+              const verifyAfterFix = await database.query(
+                'SELECT location FROM employees WHERE user_id = $1',
                 [userId]
               );
-              if (userInfo.rows.length > 0) {
-                const createResult = await database.query(
-                  `INSERT INTO employees (user_id, role, manager_id)
-                   VALUES ($1, $2, $3)
-                   RETURNING employee_id, manager_id`,
-                  [userId, normalizedRole || 'employee', hodEmployeeId]
-                );
-                if (createResult.rows.length > 0) {
-                  console.log(`✅ Created employee record with manager_id: ${createResult.rows[0].manager_id}`);
-                  employeeExists = true;
-                }
+              if (verifyAfterFix.rows.length > 0) {
+                console.log(`✅ LOCATION FIX VERIFIED: Location is now: ${verifyAfterFix.rows[0].location}`);
               }
-            } catch (createError) {
-              console.error('❌ Failed to create employee record:', createError.message);
+            } catch (fixError) {
+              console.error('❌ Failed to fix location:', fixError.message);
             }
           }
-        } catch (directError) {
-          console.warn('⚠️ Direct UPDATE also failed:', directError.message);
+        }
+      } else if (location !== undefined && empUpdateResult.rowCount > 0) {
+        // UPDATE succeeded - double-check location was saved correctly
+        // This is a safety check to ensure location persists
+        const doubleCheck = await database.query(
+          'SELECT location FROM employees WHERE user_id = $1',
+          [userId]
+        );
+        if (doubleCheck.rows.length > 0) {
+          const currentLocation = doubleCheck.rows[0].location;
+          if (currentLocation !== normalizedLocation) {
+            console.warn(`⚠️ Location mismatch detected after UPDATE. Current: ${currentLocation}, Expected: ${normalizedLocation}. Fixing...`);
+            try {
+              await database.query(
+                'UPDATE employees SET location = $1, updated_at = NOW() WHERE user_id = $2',
+                [normalizedLocation, userId]
+              );
+              console.log(`✅ Location corrected to: ${normalizedLocation}`);
+            } catch (fixErr) {
+              console.error('❌ Failed to correct location:', fixErr.message);
+            }
+          }
         }
       }
       
-      if (empUpdateResult.rowCount === 0 || !employeeExists) {
+      // If UPDATE affected 0 rows, employee record might not exist
+      // Check if we need to create it with location and/or manager_id
+      if (empUpdateResult.rowCount === 0) {
+        console.warn('⚠️ UPDATE affected 0 rows. Employee record might not exist.');
+        console.warn(`⚠️ Location being set: ${location} → normalized: ${normalizedLocation}`);
+        
+        // If we have location or manager_id to update, try to create the record
+        // CRITICAL: Always try to create/update if location is provided (even if null)
+        if (location !== undefined || shouldUpdateManagerId) {
+          // Use already normalized location value (calculated above)
+          // This ensures consistency - location is ONLY from dropdown, not from phone number
+          
+          try {
+            const createResult = await database.query(
+              `INSERT INTO employees (user_id, role, location, manager_id)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (user_id) DO UPDATE SET
+                 location = EXCLUDED.location,
+                 manager_id = EXCLUDED.manager_id,
+                 updated_at = NOW()
+               RETURNING employee_id, location, manager_id`,
+              [
+                userId,
+                normalizedRole || 'employee',
+                normalizedLocation, // Use already normalized value
+                shouldUpdateManagerId ? hodEmployeeId : null
+              ]
+            );
+            if (createResult.rows.length > 0) {
+              console.log(`✅ Created/updated employee record with location: ${createResult.rows[0].location}, manager_id: ${createResult.rows[0].manager_id}`);
+              employeeExists = true;
+              
+              // Update country_code if location was set
+              // Phone number does NOT affect this
+              if (normalizedLocation) {
+                try {
+                  await database.query(
+                    `UPDATE users SET country_code = $1 WHERE user_id = $2`,
+                    [normalizedLocation, userId]
+                  );
+                  console.log(`✅ Auto-set country_code to ${normalizedLocation} for user ${userId} (from location dropdown only)`);
+                } catch (countryCodeError) {
+                  console.warn('Could not update country_code:', countryCodeError.message);
+                }
+              }
+            }
+          } catch (createError) {
+            console.error('❌ Failed to create employee record:', createError.message);
+            // If ON CONFLICT doesn't work, try simple INSERT
+            if (createError.code === '42704' || createError.message.includes('conflict')) {
+              try {
+                await database.query(
+                  `INSERT INTO employees (user_id, role, location, manager_id)
+                   VALUES ($1, $2, $3, $4)`,
+                  [
+                    userId,
+                    normalizedRole || 'employee',
+                    normalizedLocation, // Use already normalized value
+                    shouldUpdateManagerId ? hodEmployeeId : null
+                  ]
+                );
+                console.log(`✅ Created employee record with simple INSERT`);
+                employeeExists = true;
+              } catch (simpleInsertError) {
+                console.error('❌ Simple INSERT also failed:', simpleInsertError.message);
+              }
+            }
+          }
+        }
+      }
+      
+      if (empUpdateResult.rowCount === 0 && !employeeExists && (location !== undefined || shouldUpdateManagerId || department !== undefined || designation !== undefined)) {
         console.warn('⚠️ No rows were updated in employees table. Employee record might not exist. Attempting to insert/upsert...');
         // Try to insert/upsert the employee record
         try {
           const insertHodEmployeeId = hodEmployeeId;
           console.log(`📝 Using HOD employee_id for insert: ${insertHodEmployeeId || 'NULL'}`);
+          
+          // Use already normalized location value (calculated above)
+          // Location is ONLY from dropdown, not from phone number
           
           // First try with ON CONFLICT (user_id) if unique constraint exists
           try {
@@ -1245,7 +1412,7 @@ export const UpdateEmployeeService = async (Request) => {
                 [
                   userId,
                   normalizedRole || 'employee',
-                  location || null,
+                  normalizedLocation, // Use already normalized value
                   department || null,
                   designation || null,
                   insertHodEmployeeId || null
@@ -1261,7 +1428,7 @@ export const UpdateEmployeeService = async (Request) => {
                   [
                     userId,
                     normalizedRole || 'employee',
-                    location || null,
+                    normalizedLocation, // Use already normalized value
                     department || null,
                     designation || null,
                     insertHodEmployeeId || null
@@ -1279,13 +1446,16 @@ export const UpdateEmployeeService = async (Request) => {
               console.log('📝 ON CONFLICT not supported, trying INSERT then UPDATE...');
               try {
                 // Try INSERT first
-          await database.query(
-            `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
+                // Use already normalized location value (calculated above)
+                // Location is ONLY from dropdown, not from phone number
+                
+                await database.query(
+                  `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
                    VALUES ($1, $2, $3, $4, $5, $6)`,
-            [
-              userId,
-              normalizedRole || 'employee',
-              location || null,
+                  [
+                    userId,
+                    normalizedRole || 'employee',
+                    normalizedLocation, // Use already normalized value
               department || null,
               designation || null,
               insertHodEmployeeId || null
@@ -1311,7 +1481,7 @@ export const UpdateEmployeeService = async (Request) => {
                       email || '',
                       full_name || '',
                       normalizedRole || 'employee',
-                      location || null,
+                      normalizedLocation || null,
                       department || null,
                       designation || null,
                       insertHodEmployeeId || null,
@@ -1416,7 +1586,7 @@ export const UpdateEmployeeService = async (Request) => {
             [
               userId,
                 normalizedRole || 'employee',
-                location || null,
+                normalizedLocation || null,
                 department || null,
                 designation || null,
                 insertHodEmployeeId || null
@@ -1431,7 +1601,7 @@ export const UpdateEmployeeService = async (Request) => {
                 [
                   userId,
                   normalizedRole || 'employee',
-                  location || null,
+                  normalizedLocation || null,
                   department || null,
                   designation || null,
                   insertHodEmployeeId || null
@@ -1454,7 +1624,7 @@ export const UpdateEmployeeService = async (Request) => {
                   [
                     userId,
                     normalizedRole || 'employee',
-                    location || null,
+                    normalizedLocation || null,
                     department || null,
                     designation || null,
                     insertHodEmployeeId || null
@@ -1480,7 +1650,7 @@ export const UpdateEmployeeService = async (Request) => {
               email || '',
               full_name || '',
               normalizedRole || 'employee',
-              location || null,
+              normalizedLocation || null,
               department || null,
               designation || null,
                       insertHodEmployeeId || null,
@@ -1674,13 +1844,40 @@ export const UpdateEmployeeService = async (Request) => {
       }
     }
 
+    // FINAL VERIFICATION: Ensure location was saved correctly
+    if (shouldUpdateLocation) {
+      try {
+        const finalCheck = await database.query(
+          'SELECT location FROM employees WHERE user_id = $1',
+          [userId]
+        );
+        if (finalCheck.rows.length > 0) {
+          const savedLocation = finalCheck.rows[0].location;
+          if (savedLocation !== normalizedLocation) {
+            console.warn(`⚠️ FINAL CHECK: Location mismatch! Expected: ${normalizedLocation}, Got: ${savedLocation}. Forcing update...`);
+            // Force update location one more time
+            await database.query(
+              'UPDATE employees SET location = $1, updated_at = NOW() WHERE user_id = $2',
+              [normalizedLocation, userId]
+            );
+            console.log(`✅ FINAL FIX: Location forced to ${normalizedLocation}`);
+          } else {
+            console.log(`✅ FINAL CHECK: Location correctly saved as ${savedLocation}`);
+          }
+        }
+      } catch (finalCheckError) {
+        console.error('❌ Final location check failed:', finalCheckError.message);
+      }
+    }
+
     return {
       message: "Employee updated successfully",
       user: {
         id: userId,
         email: email,
         full_name: full_name,
-        role: normalizedRole
+        role: normalizedRole,
+        location: normalizedLocation
       }
     };
   } catch (error) {

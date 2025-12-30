@@ -78,10 +78,24 @@ app.use(NotFoundError);
 // Default Error Handler
 app.use(DefaultErrorHandler);
 
-const server = app.listen(PORT, () => {
+// Initialize permissions on server startup (dynamic permission creation)
+const initializePermissions = async () => {
+  try {
+    const { InitializeRequiredPermissionsService } = await import('./services/Permission/PermissionService.js');
+    await InitializeRequiredPermissionsService();
+  } catch (error) {
+    console.error('⚠️ Warning: Could not initialize permissions on startup:', error.message);
+    // Don't block server startup if permission initialization fails
+  }
+};
+
+const server = app.listen(PORT, async () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`✅ API endpoints available at http://localhost:${PORT}/api/v1`);
   console.log(`✅ Health check available at http://localhost:${PORT}/api/health`);
+  
+  // Initialize required permissions dynamically
+  await initializePermissions();
   
   // Signal PM2 that the server is ready
   if (process.send) {

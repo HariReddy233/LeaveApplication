@@ -32,6 +32,7 @@ export default function EditEmployeePage() {
   const [adminsLoading, setAdminsLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isAdminEditingSelf, setIsAdminEditingSelf] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     fetchCurrentUser();
@@ -41,13 +42,14 @@ export default function EditEmployeePage() {
     if (employeeId) {
       fetchEmployee();
       fetchDepartments();
-      // Only fetch HODs/Admins if not admin editing self
-      if (!isAdminEditingSelf) {
+      // Only fetch HODs/Admins if user is admin and not editing self
+      // HODs don't need HODs/Admins lists for editing employees
+      if (isAdmin && !isAdminEditingSelf) {
         fetchHods();
         fetchAdmins();
       }
     }
-  }, [employeeId, isAdminEditingSelf]);
+  }, [employeeId, isAdminEditingSelf, isAdmin]);
 
   const fetchCurrentUser = async () => {
     try {
@@ -55,11 +57,13 @@ export default function EditEmployeePage() {
       if (response.data && response.data.user) {
         const user = response.data.user;
         setCurrentUser(user);
+        // Check if current user is admin
+        const userIsAdmin = (user.role || '').toLowerCase() === 'admin';
+        setIsAdmin(userIsAdmin);
         // Check if current user is admin and editing their own profile
-        const isAdmin = (user.role || '').toLowerCase() === 'admin';
         const userId = user.id || user.user_id;
         const isEditingSelf = userId?.toString() === employeeId;
-        setIsAdminEditingSelf(isAdmin && isEditingSelf);
+        setIsAdminEditingSelf(userIsAdmin && isEditingSelf);
       }
     } catch (err: any) {
       console.error('Failed to fetch current user:', err);
@@ -186,11 +190,22 @@ export default function EditEmployeePage() {
         console.log('📝 Employee role from DB:', employee.role, 'Normalized:', normalizedRole);
         console.log('📱 Phone number from DB:', employee.phone_number, '(type:', typeof employee.phone_number, ')');
         
+        // Normalize location for display: Map old values to new format
+        let normalizedLocation = employee.location || '';
+        if (normalizedLocation) {
+          const locationLower = normalizedLocation.toLowerCase();
+          if (locationLower.includes('india') || locationLower === 'in') {
+            normalizedLocation = 'IN';
+          } else if (locationLower.includes('us') || locationLower.includes('miami') || locationLower === 'us') {
+            normalizedLocation = 'US';
+          }
+        }
+        
         setFormData({
           full_name: employee.full_name || '',
           email: employee.email || '',
           role: normalizedRole,
-          location: employee.location || '',
+          location: normalizedLocation,
           department: employee.team || employee.department || '',
           designation: employee.designation || '',
           hod_id: currentHodId,
@@ -199,6 +214,7 @@ export default function EditEmployeePage() {
         });
         
         console.log('✅ Form data set:', {
+          location: employee.location || '',
           phone_number: employee.phone_number || '',
           admin_id: currentAdminId,
           hod_id: currentHodId
@@ -269,7 +285,11 @@ export default function EditEmployeePage() {
         if (status === 401) {
           errorMessage = 'Authentication failed. Please login again.';
         } else if (status === 403) {
-          errorMessage = 'Access denied. Admin privileges required to view HODs.';
+          // 403 = Permission denied - this is expected for non-admins
+          // Don't show error, just silently fail (HODs don't need HODs list)
+          errorMessage = '';
+          setHods([]);
+          return; // Exit early, don't set error message
         } else if (status === 500) {
           errorMessage = data?.message || 'Server error. Please try again later.';
         } else {
@@ -297,6 +317,10 @@ export default function EditEmployeePage() {
       setAdmins(adminsList);
     } catch (err: any) {
       console.error('Failed to fetch Admins:', err);
+      // If 403, it's expected for non-admins - silently fail
+      if (err.response?.status === 403) {
+        console.log('Access denied to Admins list (expected for non-admins)');
+      }
       setAdmins([]);
     } finally {
       setAdminsLoading(false);
@@ -317,23 +341,42 @@ export default function EditEmployeePage() {
         ...formData
       });
       
-      // Update employee details
-      const updateData = {
+      // Location is already "IN" or "US" from dropdown - no normalization needed
+      // CRITICAL: Always send location, even if empty (to allow clearing location)
+      const updateData: any = {
         full_name: formData.full_name,
         email: formData.email,
         role: formData.role,
-        location: formData.location,
+        location: formData.location || null, // Send null if empty, but always include the field
         department: formData.department,
         designation: formData.designation,
-        phone_number: formData.phone_number,
-        // Don't send hod_id/admin_id if admin is editing their own profile
-        ...(isAdminEditingSelf ? {} : { 
-          hod_id: formData.hod_id || '',
-          admin_id: formData.admin_id || ''
-        }),
+        phone_number: formData.phone_number || null, // Ensure phone_number is sent
       };
       
-      console.log('📤 Sending update request with data:', updateData);
+      // Only send hod_id/admin_id if:
+      // 1. User is admin (not HOD)
+      // 2. Not editing their own profile
+      // HODs don't need to assign HODs/Admins, so don't send these fields
+      if (isAdmin && !isAdminEditingSelf) {
+        // Send hod_id and admin_id, but use null instead of empty string
+        if (formData.hod_id) {
+          updateData.hod_id = formData.hod_id;
+        } else {
+          updateData.hod_id = null; // Send null instead of empty string
+        }
+        if (formData.admin_id) {
+          updateData.admin_id = formData.admin_id;
+        } else {
+          updateData.admin_id = null; // Send null instead of empty string
+        }
+      }
+      
+      console.log('📤 Submitting employee update with data:', {
+        ...updateData,
+        location_value: formData.location,
+        location_type: typeof formData.location,
+        location_in_payload: updateData.location
+      });
       console.log('📤 HOD ID being sent:', updateData.hod_id, '(type:', typeof updateData.hod_id, ')');
       
       await api.patch(`/User/UpdateEmployee/${employeeId}`, updateData);
@@ -353,7 +396,12 @@ export default function EditEmployeePage() {
       }
       
       alert('Employee updated successfully!');
-      router.push('/dashboard/employees?refresh=true');
+      // Refetch employee data to show updated location
+      await fetchEmployee();
+      // Small delay to ensure data is refreshed
+      setTimeout(() => {
+        router.push('/dashboard/employees?refresh=true');
+      }, 500);
     } catch (err: any) {
       console.error('Employee update error:', err);
       if (err.response?.status === 401) {
@@ -364,7 +412,11 @@ export default function EditEmployeePage() {
         }, 2000);
       } else if (err.response?.status === 403) {
         // 403 = Permission denied - show error but don't redirect
-        setError(err.response?.data?.message || 'You do not have permission to edit employees. Please contact your administrator.');
+        // This should not happen if HODs have employee.edit permission
+        const errorMsg = err.response?.data?.message || 'You do not have permission to edit employees. Please contact your administrator.';
+        setError(errorMsg);
+        console.error('Permission denied:', errorMsg);
+        // Don't redirect to login on 403 - just show error
       } else {
         setError(err.response?.data?.error || err.response?.data?.message || 'Failed to update employee');
       }
@@ -465,13 +517,19 @@ export default function EditEmployeePage() {
                 <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-2">
                   Location
                 </label>
-                <input
+                <select
                   id="location"
-                  type="text"
                   value={formData.location}
                   onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
-                />
+                >
+                  <option value="">Select Location</option>
+                  <option value="IN">India</option>
+                  <option value="US">United States</option>
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Select the employee's country
+                </p>
               </div>
             </div>
 
@@ -530,7 +588,8 @@ export default function EditEmployeePage() {
             </div>
 
             {/* HOD Assignment - Mandatory (only for employees, not for HODs or Admin editing self) */}
-            {formData.role?.toLowerCase() === 'employee' && !isAdminEditingSelf && (
+            {/* Only show if user is admin (HODs don't need to assign HODs) */}
+            {formData.role?.toLowerCase() === 'employee' && !isAdminEditingSelf && isAdmin && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label htmlFor="hod_id" className="block text-sm font-medium text-gray-700 mb-2">
@@ -574,7 +633,8 @@ export default function EditEmployeePage() {
             )}
 
             {/* Admin Assignment - Only for HODs (not for employees or admins) */}
-            {(formData.role?.toLowerCase() === 'hod' || formData.role?.toLowerCase() === 'HOD') && !isAdminEditingSelf && (
+            {/* Only show if user is admin (HODs don't need to assign Admins) */}
+            {(formData.role?.toLowerCase() === 'hod' || formData.role?.toLowerCase() === 'HOD') && !isAdminEditingSelf && isAdmin && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label htmlFor="admin_id" className="block text-sm font-medium text-gray-700 mb-2">

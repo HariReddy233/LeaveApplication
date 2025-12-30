@@ -5,7 +5,7 @@ const CalendarRoutes = express.Router();
 //Internal Lib Import
 import CalendarControllers from "../controller/Calendar/CalendarControllers.js";
 import { CheckEmployeeAuth, CheckAdminAuth, CheckHodAuth } from "../middleware/CheckAuthLogin.js";
-import { CheckPermission } from "../middleware/CheckPermission.js";
+import { CheckPermission, CheckAdminOrPermission } from "../middleware/CheckPermission.js";
 
 //Calendar View
 CalendarRoutes.get(
@@ -44,12 +44,19 @@ CalendarRoutes.get(
   CalendarControllers.AllBlockedDates,
 );
 
-//Organization Holidays Management (Admin/HOD with permission)
+//Organization Holidays Management (Admin always, HOD with leave.update_list permission)
 CalendarRoutes.post(
   "/OrganizationHoliday",
   CheckEmployeeAuth,
-  CheckPermission('calendar.block_dates'),
+  CheckAdminOrPermission('leave.update_list'),
   CalendarControllers.CreateOrganizationHoliday,
+);
+
+CalendarRoutes.post(
+  "/BulkOrganizationHolidays",
+  CheckEmployeeAuth,
+  CheckAdminOrPermission('leave.update_list'),
+  CalendarControllers.BulkCreateOrganizationHolidays,
 );
 
 CalendarRoutes.get(
@@ -61,22 +68,22 @@ CalendarRoutes.get(
 CalendarRoutes.put(
   "/OrganizationHoliday/:id",
   CheckEmployeeAuth,
-  CheckPermission('calendar.block_dates'),
+  CheckAdminOrPermission('leave.update_list'),
   CalendarControllers.UpdateOrganizationHoliday,
 );
 
 CalendarRoutes.delete(
   "/OrganizationHoliday/:id",
   CheckEmployeeAuth,
-  CheckAdminAuth, // Only Admin can delete organization holidays
+  CheckAdminOrPermission('leave.update_list'), // Admin always, HOD with permission
   CalendarControllers.DeleteOrganizationHoliday,
 );
 
-//Employee-Specific Blocked Dates (Admin/HOD with permission)
+//Employee-Specific Blocked Dates (Admin always, HOD with leave.update_list permission)
 CalendarRoutes.post(
   "/BlockEmployeeDates",
   CheckEmployeeAuth,
-  CheckPermission('calendar.block_dates'),
+  CheckAdminOrPermission('leave.update_list'),
   CalendarControllers.BlockEmployeeDates,
 );
 
@@ -89,8 +96,16 @@ CalendarRoutes.get(
 CalendarRoutes.delete(
   "/EmployeeBlockedDate/:id",
   CheckEmployeeAuth,
-  CheckPermission('calendar.block_dates'),
+  CheckAdminOrPermission('leave.update_list'),
   CalendarControllers.DeleteEmployeeBlockedDate,
+);
+
+//Country-Specific Holiday Management (Admin always, HOD with leave.update_list permission)
+CalendarRoutes.delete(
+  "/CountryHoliday/:id",
+  CheckEmployeeAuth,
+  CheckAdminOrPermission('leave.update_list'),
+  CalendarControllers.DeleteCountryHoliday,
 );
 
 export default CalendarRoutes;

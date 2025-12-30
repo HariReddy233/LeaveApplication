@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import api from '@/lib/api';
 import PageTitle from '@/components/Common/PageTitle';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Users } from 'lucide-react';
 
 export default function EmployeesPage() {
   const router = useRouter();
@@ -128,8 +128,24 @@ export default function EmployeesPage() {
       fetchEmployees();
     } catch (err: any) {
       console.error('Failed to delete employee:', err);
-      const errorMsg = err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to delete employee';
-      alert(errorMsg);
+      
+      // Handle different error types correctly
+      if (err.response?.status === 401) {
+        // 401 = Authentication failed - redirect to login
+        alert('Session expired. Please login again.');
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('auth_token');
+          window.location.href = '/login';
+        }
+      } else if (err.response?.status === 403) {
+        // 403 = Permission denied - show error but don't redirect
+        const errorMsg = err.response?.data?.message || 'You do not have permission to delete employees. Please contact your administrator.';
+        alert(`Access denied: ${errorMsg}`);
+      } else {
+        // Other errors (network, validation, etc.)
+        const errorMsg = err.response?.data?.message || err.response?.data?.error || err.message || 'Failed to delete employee';
+        alert(errorMsg);
+      }
     }
   };
 

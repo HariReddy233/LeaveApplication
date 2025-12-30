@@ -81,6 +81,7 @@ INSERT INTO permissions (permission_key, permission_name, description, category)
 ('leave.view_all', 'View All Leaves', 'View all leave applications', 'leave'),
 ('leave.approve', 'Approve Leave', 'Approve leave applications', 'leave'),
 ('leave.reject', 'Reject Leave', 'Reject leave applications', 'leave'),
+('leave.update_list', 'Update Leave List', 'Allow user to update organization leave dates and blocked dates', 'leave'),
 
 ('authorization.create', 'Create Authorization', 'Create authorization requests', 'authorization'),
 ('authorization.view_own', 'View Own Authorizations', 'View own authorization requests', 'authorization'),

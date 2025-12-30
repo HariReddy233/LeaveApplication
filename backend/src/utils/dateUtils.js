@@ -3,12 +3,19 @@
  * Helper functions for date calculations and validations
  */
 
+import { isWeekendForCountry, getWeekendDaysByCountry } from './countryCodeUtils.js';
+
 /**
  * Check if a date is a weekend (Saturday or Sunday)
  * @param {Date} date - Date to check
+ * @param {string} countryCode - Optional country code for country-specific weekends
  * @returns {boolean} - True if weekend, false otherwise
  */
-export const isWeekend = (date) => {
+export const isWeekend = (date, countryCode = null) => {
+  if (countryCode) {
+    return isWeekendForCountry(date, countryCode);
+  }
+  // Default: Saturday or Sunday
   const day = date.getDay();
   return day === 0 || day === 6; // 0 = Sunday, 6 = Saturday
 };
@@ -17,9 +24,10 @@ export const isWeekend = (date) => {
  * Calculate number of days between two dates, excluding weekends
  * @param {Date|string} startDate - Start date
  * @param {Date|string} endDate - End date
+ * @param {string} countryCode - Optional country code for country-specific weekends
  * @returns {number} - Number of days excluding weekends
  */
-export const calculateDaysExcludingWeekends = (startDate, endDate) => {
+export const calculateDaysExcludingWeekends = (startDate, endDate, countryCode = null) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
   
@@ -30,8 +38,12 @@ export const calculateDaysExcludingWeekends = (startDate, endDate) => {
   let count = 0;
   const current = new Date(start);
   
+  // Get weekend days for country (if provided)
+  const weekendDays = countryCode ? getWeekendDaysByCountry(countryCode) : [0, 6]; // Default: Sunday, Saturday
+  
   while (current <= end) {
-    if (!isWeekend(current)) {
+    const dayOfWeek = current.getDay();
+    if (!weekendDays.includes(dayOfWeek)) {
       count++;
     }
     current.setDate(current.getDate() + 1);
@@ -75,4 +87,5 @@ export const formatDateString = (date) => {
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
 

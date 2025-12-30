@@ -4,6 +4,7 @@ import { CreateError } from "../../helper/ErrorHandler.js";
 import sseService from "../SSE/SSEService.js";
 import { createApprovalToken, getBaseUrl } from "../../utils/approvalToken.js";
 import { calculateDaysExcludingWeekends, getDatesInRange, formatDateString } from "../../utils/dateUtils.js";
+import { extractCountryCodeFromPhone } from "../../utils/countryCodeUtils.js";
 
 /**
  * Create Leave Application
@@ -31,11 +32,56 @@ export const CreateLeaveService = async (Request) => {
     empId = empResult.rows[0].employee_id;
   }
 
-  // Check for blocked dates (organization holidays + employee-specific blocked dates)
+  // Get user's location (from employees.location, fallback to users.country_code)
+  // This determines which country-specific holidays to check
+  let userLocation = null;
+  try {
+    // First try to get location from employees table (primary source)
+    const empResult = await database.query(
+      `SELECT e.location, u.country_code 
+       FROM employees e
+       JOIN users u ON e.user_id = u.user_id
+       WHERE e.user_id = $1
+       LIMIT 1`,
+      [UserId]
+    );
+    
+    if (empResult.rows.length > 0) {
+      // Use employees.location as primary source, fallback to users.country_code
+      userLocation = empResult.rows[0].location || empResult.rows[0].country_code;
+    } else {
+      // If no employee record, try users table directly
+      const userResult = await database.query(
+        `SELECT country_code FROM users WHERE user_id = $1 LIMIT 1`,
+        [UserId]
+      );
+      if (userResult.rows.length > 0) {
+        userLocation = userResult.rows[0].country_code;
+      }
+    }
+    
+    // Normalize location to 'US' or 'IN' if needed
+    if (userLocation) {
+      const locationUpper = String(userLocation).toUpperCase().trim();
+      if (locationUpper === 'US' || locationUpper === 'UNITED STATES') {
+        userLocation = 'US';
+      } else if (locationUpper === 'IN' || locationUpper === 'INDIA') {
+        userLocation = 'IN';
+      } else {
+        // If location doesn't match US/IN, set to null (user won't see country-specific holidays)
+        userLocation = null;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not fetch user location:', err.message);
+    userLocation = null;
+  }
+  
+  // Check for blocked dates (organization holidays + country-specific holidays + employee-specific blocked dates)
   const datesInRange = getDatesInRange(start_date, end_date);
   const dateStrings = datesInRange.map(d => formatDateString(d));
   
-  // Check organization holidays
+  // Check organization holidays (All Teams) - these apply to everyone
   const currentYear = new Date(start_date).getFullYear();
   const orgHolidaysCheck = await database.query(
     `SELECT holiday_date, holiday_name
@@ -48,6 +94,18 @@ export const CreateLeaveService = async (Request) => {
     [dateStrings, currentYear]
   );
   
+  // Check country-specific holidays ONLY if user has a matching location
+  // Only check holidays where country_code matches user's location (US or IN)
+  let countryHolidaysCheck = { rows: [] };
+  if (userLocation && (userLocation === 'US' || userLocation === 'IN')) {
+    countryHolidaysCheck = await database.query(
+      `SELECT holiday_date, holiday_name
+       FROM holidays
+       WHERE country_code = $1 AND holiday_date = ANY($2::date[]) AND is_active = true`,
+      [userLocation, dateStrings]
+    ).catch(() => ({ rows: [] })); // Ignore if table doesn't exist yet
+  }
+  
   // Check employee-specific blocked dates
   const empBlockedCheck = await database.query(
     `SELECT blocked_date, reason
@@ -59,6 +117,7 @@ export const CreateLeaveService = async (Request) => {
   // Combine blocked dates
   const blockedDates = [
     ...orgHolidaysCheck.rows.map(r => ({ date: r.holiday_date, reason: r.holiday_name, type: 'organization_holiday' })),
+    ...countryHolidaysCheck.rows.map(r => ({ date: r.holiday_date, reason: r.holiday_name, type: 'country_holiday' })),
     ...empBlockedCheck.rows.map(r => ({ date: r.blocked_date, reason: r.reason, type: 'employee_blocked' }))
   ];
   
@@ -71,13 +130,13 @@ export const CreateLeaveService = async (Request) => {
     );
   }
 
-  // Calculate number of days excluding weekends (Saturday and Sunday)
+  // Calculate number of days excluding weekends (country-specific)
   let numDays = number_of_days;
   if (!numDays) {
-    numDays = calculateDaysExcludingWeekends(start_date, end_date);
+    numDays = calculateDaysExcludingWeekends(start_date, end_date, userCountryCode);
   } else {
     // If number_of_days is provided, recalculate to exclude weekends for accurate balance check
-    numDays = calculateDaysExcludingWeekends(start_date, end_date);
+    numDays = calculateDaysExcludingWeekends(start_date, end_date, userCountryCode);
   }
 
   // Check for overlapping leave dates (only for pending or approved leaves)

@@ -5,7 +5,7 @@ import { HashPassword } from "../../utility/BcryptHelper.js";
 import database from "../../config/database.js";
 
 const RegistrationService = async (Request) => {
-  const { email, password, role, department, hod_id, first_name, last_name, designation } = Request.body;
+  const { email, password, role, department, hod_id, first_name, last_name, designation, location, phone_number } = Request.body;
 
   if (!email || !password) {
     throw CreateError("Email and password are required", 400);
@@ -195,6 +195,44 @@ const RegistrationService = async (Request) => {
         }
       }
 
+      // CRITICAL: Location is ONLY set from the location dropdown field
+      // Phone number does NOT affect location or country_code
+      // Normalize location: Accept IN/US directly, or normalize legacy values
+      // Store ONLY "IN" or "US" in database
+      let normalizedLocation = location || null;
+      if (normalizedLocation) {
+        const locationUpper = normalizedLocation.toUpperCase().trim();
+        // Accept IN or US directly (from dropdown)
+        if (locationUpper === 'IN' || locationUpper === 'US') {
+          normalizedLocation = locationUpper;
+        } else {
+          // Normalize legacy values for backward compatibility
+          const locationLower = normalizedLocation.toLowerCase().trim();
+          if (locationLower === 'in' || locationLower.includes('india')) {
+            normalizedLocation = 'IN';
+          } else if (locationLower === 'us' || locationLower.includes('united states') || locationLower.includes('miami')) {
+            normalizedLocation = 'US';
+          } else {
+            // If invalid value, set to null
+            normalizedLocation = null;
+          }
+        }
+      }
+      
+      // Auto-set country_code based on normalized location ONLY
+      // Phone number does NOT affect this
+      if (normalizedLocation) {
+        try {
+          await database.query(
+            `UPDATE users SET country_code = $1 WHERE user_id = $2`,
+            [normalizedLocation, userId]
+          );
+          console.log(`✅ Auto-set country_code to ${normalizedLocation} for user ${userId} based on location dropdown: ${location} → ${normalizedLocation}`);
+        } catch (countryCodeError) {
+          console.warn('Could not update country_code:', countryCodeError.message);
+        }
+      }
+      
       // Try to insert employee record with ON CONFLICT
       try {
         await database.query(
@@ -204,7 +242,7 @@ const RegistrationService = async (Request) => {
           [
             userId,
             normalizedRole,
-            null, // location
+            normalizedLocation, // normalized location (IN or US)
             department || null, // team/department
             designation || null,
             hodEmployeeId // manager_id (HOD)
@@ -229,7 +267,7 @@ const RegistrationService = async (Request) => {
               [
                 userId,
                 normalizedRole,
-                null,
+                normalizedLocation, // normalized location (IN or US)
                 department || null,
                 designation || null,
                 hodEmployeeId

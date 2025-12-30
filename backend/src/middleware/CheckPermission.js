@@ -98,5 +98,54 @@ export const CheckMultiplePermissions = (permissionKeys, mode = 'any') => {
   };
 };
 
+/**
+ * @desc CheckAdminOrPermission Middleware
+ * @access private
+ * @method POST/GET/PATCH/DELETE
+ * 
+ * Usage: CheckAdminOrPermission('permission.key')
+ * - Admin: Always allowed (bypasses permission check)
+ * - HOD/Employee: Must have the specified permission
+ * 
+ * This is useful for features where Admin has full access by default,
+ * but HODs need explicit permission (e.g., Update Leave List)
+ */
+export const CheckAdminOrPermission = (permissionKey) => {
+  return async (req, res, next) => {
+    try {
+      const userId = req.UserId;
+      const userRole = req.Role;
+      
+      if (!userId) {
+        throw CreateError("Authentication required", 401);
+      }
+      
+      if (!permissionKey) {
+        throw CreateError("Permission key is required", 400);
+      }
+      
+      // Admin always has access (bypass permission check)
+      if (userRole && userRole.toLowerCase() === 'admin') {
+        return next();
+      }
+      
+      // For non-admin users, check the permission
+      const hasPermission = await CheckUserPermissionService(userId, permissionKey);
+      
+      if (!hasPermission) {
+        throw CreateError(`Access denied. Required permission: ${permissionKey}`, 403);
+      }
+      
+      // Permission granted, continue
+      next();
+    } catch (error) {
+      res.status(error.status || 403).json({ 
+        message: error.message || "Permission denied",
+        requiredPermission: permissionKey
+      });
+    }
+  };
+};
+
 
 

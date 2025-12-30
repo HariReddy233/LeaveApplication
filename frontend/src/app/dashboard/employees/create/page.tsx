@@ -155,6 +155,7 @@ export default function CreateEmployeePage() {
     setError('');
 
     try {
+      // Location is already "IN" or "US" from dropdown - no normalization needed
       await api.post('/Auth/RegisterUserWithPermission', formData);
       // Redirect with refresh parameter to trigger refetch
       router.push('/dashboard/employees?refresh=true');
@@ -281,13 +282,19 @@ export default function CreateEmployeePage() {
                 <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-2">
                   Location
                 </label>
-                <input
+                <select
                   id="location"
-                  type="text"
                   value={formData.location}
                   onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
-                />
+                >
+                  <option value="">Select Location</option>
+                  <option value="IN">India</option>
+                  <option value="US">United States</option>
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Select the employee's country
+                </p>
               </div>
 
               {/* Department */}

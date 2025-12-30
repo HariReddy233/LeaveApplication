@@ -86,6 +86,7 @@ export const PermissionKeys = {
   LEAVE_VIEW_ALL: 'leave.view_all',
   LEAVE_APPROVE: 'leave.approve',
   LEAVE_REJECT: 'leave.reject',
+  LEAVE_UPDATE_LIST: 'leave.update_list',
   
   // Department Management
   DEPARTMENT_CREATE: 'department.create',
