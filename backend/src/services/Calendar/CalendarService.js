@@ -713,8 +713,14 @@ export const GetOrganizationHolidaysService = async (Request) => {
   
   const countryResult = await database.query(countryQuery, countryParams).catch(() => ({ rows: [] }));
   
-  // Combine and return both types
-  return [...orgResult.rows, ...countryResult.rows];
+  // Combine and return both types, sorted by date ASC
+  const combined = [...orgResult.rows, ...countryResult.rows];
+  combined.sort((a, b) => {
+    const dateA = new Date(a.holiday_date);
+    const dateB = new Date(b.holiday_date);
+    return dateA.getTime() - dateB.getTime();
+  });
+  return combined;
 };
 
 /**

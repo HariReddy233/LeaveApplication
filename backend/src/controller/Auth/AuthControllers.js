@@ -80,10 +80,9 @@ export const GetCurrentUser = async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    // Get user from database - handle both schema types
+    // Get user from database (uses user_id as primary key)
     let userResult;
     try {
-      // Try new schema first (user_id, first_name, last_name)
       userResult = await database.query(
         `SELECT user_id, first_name, last_name, 
          COALESCE(first_name || ' ' || last_name, first_name, last_name, email) as full_name,
@@ -94,14 +93,6 @@ export const GetCurrentUser = async (req, res, next) => {
          LIMIT 1`,
         [decoded.id]
       );
-      
-      // If no result, try with id column (old schema)
-      if (userResult.rows.length === 0) {
-        userResult = await database.query(
-          'SELECT id, email, full_name, role FROM users WHERE id = $1 LIMIT 1',
-          [decoded.id]
-        );
-      }
     } catch (dbError) {
       console.error('Database query error:', dbError);
       return res.status(500).json({ error: 'Database error', message: dbError.message });
@@ -112,7 +103,7 @@ export const GetCurrentUser = async (req, res, next) => {
     }
 
     const user = userResult.rows[0];
-    const userId = user.user_id || user.id;
+    const userId = user.user_id;
     
     res.json({ 
       user: {

@@ -11,25 +11,16 @@ const LoginService = async (Request) => {
     throw CreateError("Invalid Data", 400);
   }
 
-  // Find user - handle both schema types
+  // Find user (database uses user_id as primary key)
   let userResult;
   try {
-    // Try new schema first (user_id, first_name, last_name)
     userResult = await database.query(
-      `SELECT user_id as id, first_name, last_name, 
+      `SELECT user_id, first_name, last_name, 
        COALESCE(first_name || ' ' || last_name, first_name, last_name, email) as full_name,
        email, password_hash, role, status, department, designation
        FROM users WHERE LOWER(email) = $1 LIMIT 1`,
       [email.toLowerCase()]
     );
-    
-    // If no result, try old schema (id, full_name)
-    if (userResult.rows.length === 0) {
-      userResult = await database.query(
-        'SELECT * FROM users WHERE LOWER(email) = $1 LIMIT 1',
-        [email.toLowerCase()]
-      );
-    }
   } catch (dbError) {
     console.error('Database query error:', dbError);
     throw CreateError(`Database error: ${dbError.message}`, 500);
@@ -65,7 +56,7 @@ const LoginService = async (Request) => {
     throw CreateError("Unauthorized Credentials", 401);
   }
 
-  const userId = user.id || user.user_id;
+  const userId = user.user_id;
   const fullName = user.full_name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email;
 
   const payLoad = {

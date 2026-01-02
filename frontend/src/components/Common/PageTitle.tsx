@@ -18,6 +18,15 @@ type PageTitleProps = {
  * Displays breadcrumbs and page title
  */
 export default function PageTitle({ breadCrumbItems = [], title }: PageTitleProps) {
+  // Filter out duplicate "Dashboard" entries from breadCrumbItems
+  const filteredBreadcrumbs = breadCrumbItems.filter((item, index) => {
+    // Remove "Dashboard" if it's the first item (since we always show Dashboard first)
+    if (index === 0 && item.label.toLowerCase() === 'dashboard') {
+      return false;
+    }
+    return true;
+  });
+
   return (
     <div className="mb-4">
       <div className="flex items-center justify-between mb-2">
@@ -25,7 +34,7 @@ export default function PageTitle({ breadCrumbItems = [], title }: PageTitleProp
           <Link href="/dashboard" className="hover:text-gray-900">
             Dashboard
           </Link>
-          {breadCrumbItems && breadCrumbItems.length > 0 && breadCrumbItems.map((item, index) => (
+          {filteredBreadcrumbs && filteredBreadcrumbs.length > 0 && filteredBreadcrumbs.map((item, index) => (
             <span key={index} className="flex items-center">
               <span className="mx-2">/</span>
               {item.active ? (

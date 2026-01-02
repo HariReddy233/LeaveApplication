@@ -2351,6 +2351,141 @@ export const BulkApproveLeaveAdminService = async (Request) => {
   };
 };
 
+/**
+ * Get Leave Reports (with filters)
+ * Used for Reports page - filters by employee, status, date range, leave type
+ */
+export const GetLeaveReportsService = async (Request) => {
+  const { employee_id, status, from_date, to_date, leave_type } = Request.query;
+  
+  try {
+    let query = `
+      SELECT 
+        la.id,
+        la.leave_type,
+        lt.code as leave_type_code,
+        TO_CHAR(la.created_at, 'YYYY-MM-DD') as applied_date,
+        TO_CHAR(la.start_date, 'YYYY-MM-DD') as start_date,
+        TO_CHAR(la.end_date, 'YYYY-MM-DD') as end_date,
+        la.number_of_days,
+        CASE 
+          WHEN la.hod_status = 'Rejected' OR la.admin_status = 'Rejected' THEN 'Rejected'
+          WHEN la.hod_status = 'Approved' AND la.admin_status = 'Approved' THEN 'Approved'
+          WHEN la.hod_status = 'Approved' OR la.admin_status = 'Approved' THEN 'Approved'
+          ELSE 'Pending'
+        END as status,
+        la.hod_status,
+        la.admin_status,
+        la.reason,
+        COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as employee_name,
+        u.email as employee_email,
+        COALESCE(
+          NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
+          hod_approver.first_name,
+          hod_approver.last_name,
+          hod_approver.email,
+          NULL
+        ) as hod_approver_name,
+        COALESCE(
+          NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+          admin_approver.first_name,
+          admin_approver.last_name,
+          admin_approver.email,
+          NULL
+        ) as admin_approver_name,
+        CASE 
+          WHEN la.hod_status = 'Approved' AND la.admin_status = 'Approved' THEN 
+            COALESCE(
+              NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+              admin_approver.first_name,
+              admin_approver.last_name,
+              admin_approver.email,
+              NULL
+            )
+          WHEN la.hod_status = 'Approved' THEN 
+            COALESCE(
+              NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
+              hod_approver.first_name,
+              hod_approver.last_name,
+              hod_approver.email,
+              NULL
+            )
+          WHEN la.admin_status = 'Approved' THEN 
+            COALESCE(
+              NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+              admin_approver.first_name,
+              admin_approver.last_name,
+              admin_approver.email,
+              NULL
+            )
+          ELSE NULL
+        END as approved_by,
+        COALESCE(e.team, e.location, 'N/A') as team
+      FROM leave_applications la
+      JOIN employees e ON la.employee_id = e.employee_id
+      JOIN users u ON e.user_id = u.user_id
+      LEFT JOIN leave_types lt ON la.leave_type = lt.name
+      LEFT JOIN employees hod_emp ON la.approved_by_hod = hod_emp.employee_id
+      LEFT JOIN users hod_approver ON hod_emp.user_id = hod_approver.user_id
+      LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
+      LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
+      WHERE 1=1
+    `;
+    
+    const params = [];
+    let paramCount = 1;
+    
+    // Filter by employee_id (user_id)
+    if (employee_id && employee_id !== 'all' && employee_id !== '') {
+      query += ` AND u.user_id = $${paramCount}`;
+      params.push(employee_id);
+      paramCount++;
+    }
+    
+    // Filter by status (use calculated status from hod_status and admin_status)
+    if (status && status !== 'all' && status !== '') {
+      if (status === 'Approved') {
+        query += ` AND (la.hod_status = 'Approved' OR la.admin_status = 'Approved') AND la.hod_status != 'Rejected' AND la.admin_status != 'Rejected'`;
+      } else if (status === 'Rejected') {
+        query += ` AND (la.hod_status = 'Rejected' OR la.admin_status = 'Rejected')`;
+      } else if (status === 'Pending') {
+        query += ` AND (la.hod_status = 'Pending' OR la.hod_status IS NULL) AND (la.admin_status = 'Pending' OR la.admin_status IS NULL) AND la.hod_status != 'Rejected' AND la.admin_status != 'Rejected'`;
+      }
+    }
+    
+    // Filter by date range
+    if (from_date) {
+      query += ` AND la.start_date >= $${paramCount}`;
+      params.push(from_date);
+      paramCount++;
+    }
+    if (to_date) {
+      query += ` AND la.end_date <= $${paramCount}`;
+      params.push(to_date);
+      paramCount++;
+    }
+    
+    // Filter by leave type
+    if (leave_type && leave_type !== 'all' && leave_type !== '') {
+      query += ` AND la.leave_type = $${paramCount}`;
+      params.push(leave_type);
+      paramCount++;
+    }
+    
+    query += ` ORDER BY la.start_date DESC`;
+    
+    const result = await database.query(query, params);
+    
+    return {
+      data: result.rows,
+      count: result.rows.length
+    };
+  } catch (error) {
+    console.error('GetLeaveReportsService error:', error);
+    throw CreateError(error.message || "Failed to fetch leave reports", 500);
+  }
+};
+
 // Note: All services are exported inline using 'export const'
 // This list is for reference only - no duplicate exports needed
 

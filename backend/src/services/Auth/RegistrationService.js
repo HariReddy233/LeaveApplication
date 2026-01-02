@@ -5,7 +5,7 @@ import { HashPassword } from "../../utility/BcryptHelper.js";
 import database from "../../config/database.js";
 
 const RegistrationService = async (Request) => {
-  const { email, password, role, department, hod_id, first_name, last_name, designation, location, phone_number } = Request.body;
+  const { email, password, role, department, hod_id, first_name, last_name, full_name, designation, location, phone_number } = Request.body;
 
   if (!email || !password) {
     throw CreateError("Email and password are required", 400);
@@ -22,22 +22,18 @@ const RegistrationService = async (Request) => {
     throw CreateError("Password must be at least 6 characters", 400);
   }
 
-  // Check if user already exists - handle both schema types
+  // Check if user already exists (exclude inactive/deleted users to allow re-creation)
   let existingUser;
   try {
-    // Try new schema first (user_id, first_name, last_name)
+    // Database uses user_id as primary key
+    // Only check for active users - allow re-creating deleted users
     existingUser = await database.query(
-      `SELECT user_id, email FROM users WHERE LOWER(email) = $1 LIMIT 1`,
+      `SELECT user_id, email FROM users 
+       WHERE LOWER(email) = $1 
+       AND (status = 'Active' OR status IS NULL OR status = '')
+       LIMIT 1`,
       [email.toLowerCase()]
     );
-    
-    // If no result, try old schema (id, full_name)
-    if (existingUser.rows.length === 0) {
-      existingUser = await database.query(
-        'SELECT id, email FROM users WHERE LOWER(email) = $1 LIMIT 1',
-        [email.toLowerCase()]
-      );
-    }
   } catch (dbError) {
     console.error('Database query error:', dbError);
     throw CreateError(`Database error: ${dbError.message}`, 500);
@@ -50,18 +46,27 @@ const RegistrationService = async (Request) => {
   // Hash password
   const passwordHash = await HashPassword(password);
 
-  // Prepare user data
+  // Prepare user data - handle both first_name/last_name and full_name
   const normalizedRole = role?.toLowerCase() || 'employee';
-  const fullName = first_name && last_name 
-    ? `${first_name} ${last_name}`.trim()
-    : first_name || last_name || email.split('@')[0];
+  let finalFirstName = first_name || null;
+  let finalLastName = last_name || null;
+  
+  // If full_name is provided but first_name/last_name are not, split full_name
+  if (full_name && !first_name && !last_name) {
+    const nameParts = full_name.trim().split(/\s+/);
+    finalFirstName = nameParts[0] || null;
+    finalLastName = nameParts.slice(1).join(' ') || null;
+  } else if (!first_name && !last_name) {
+    // Fallback: use email username as first name
+    finalFirstName = email.split('@')[0];
+    finalLastName = null;
+  }
 
-  // Insert user - handle both schema types
+  // Insert user (database uses user_id, first_name, last_name)
   let userResult;
   let userId;
   
   try {
-    // Try new schema first (user_id, first_name, last_name)
     userResult = await database.query(
       `INSERT INTO users (email, password_hash, first_name, last_name, role, status, department, designation)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -69,8 +74,8 @@ const RegistrationService = async (Request) => {
       [
         email.toLowerCase(),
         passwordHash,
-        first_name || null,
-        last_name || null,
+        finalFirstName,
+        finalLastName,
         normalizedRole,
         'Active',
         department || null,
@@ -86,73 +91,13 @@ const RegistrationService = async (Request) => {
     if (insertError.code === '23505' && insertError.constraint === 'users_email_key') {
       throw CreateError(`Email "${email}" is already in use by another user`, 400);
     }
-    
-    // If new schema fails, try old schema (id, full_name) or alternative (user_id, full_name)
-    if (insertError.code === '42703' || insertError.message.includes('column')) {
-      try {
-        // First try: Use user_id (most common case)
-        try {
-          userResult = await database.query(
-            `INSERT INTO users (email, password_hash, full_name, role, status)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING user_id, email, full_name, role`,
-            [
-              email.toLowerCase(),
-              passwordHash,
-              fullName,
-              normalizedRole,
-              'Active'
-            ]
-          );
-          
-          if (userResult.rows.length > 0) {
-            userId = userResult.rows[0].user_id;
-          }
-        } catch (userIdError) {
-          // If user_id doesn't work, try id column (old schema)
-          if (userIdError.code === '42703' || userIdError.message.includes('column') || userIdError.message.includes('does not exist')) {
-            userResult = await database.query(
-              `INSERT INTO users (email, password_hash, full_name, role, status)
-               VALUES ($1, $2, $3, $4, $5)
-               RETURNING id, email, full_name, role`,
-              [
-                email.toLowerCase(),
-                passwordHash,
-                fullName,
-                normalizedRole,
-                'Active'
-              ]
-            );
-            
-            if (userResult.rows.length > 0) {
-              userId = userResult.rows[0].id;
-            }
-          } else {
-            throw userIdError;
-          }
-        }
-      } catch (oldSchemaError) {
-        // Handle duplicate email error in retry
-        if (oldSchemaError.code === '23505' && oldSchemaError.constraint === 'users_email_key') {
-          throw CreateError(`Email "${email}" is already in use by another user`, 400);
-        }
-        // Handle column not found errors more gracefully
-        if (oldSchemaError.code === '42703' || oldSchemaError.message.includes('column') || oldSchemaError.message.includes('does not exist')) {
-          console.error('Database schema error:', oldSchemaError.message);
-          throw CreateError(`Database schema error: ${oldSchemaError.message}. Please contact administrator.`, 500);
-        }
-        console.error('Database insert error:', oldSchemaError);
-        throw CreateError(`Failed to create user: ${oldSchemaError.message}`, 500);
-      }
-    } else {
-      // Handle column not found errors more gracefully
-      if (insertError.code === '42703' || insertError.message.includes('column') || insertError.message.includes('does not exist')) {
-        console.error('Database schema error:', insertError.message);
-        throw CreateError(`Database schema error: ${insertError.message}. Please contact administrator.`, 500);
-      }
-      console.error('Database insert error:', insertError);
-      throw CreateError(`Failed to create user: ${insertError.message}`, 500);
+    // Handle column not found errors more gracefully
+    if (insertError.code === '42703' || insertError.message.includes('column') || insertError.message.includes('does not exist')) {
+      console.error('Database schema error:', insertError.message);
+      throw CreateError(`Database schema error: ${insertError.message}. Please contact administrator.`, 500);
     }
+    console.error('Database insert error:', insertError);
+    throw CreateError(`Failed to create user: ${insertError.message}`, 500);
   }
 
   if (!userId) {

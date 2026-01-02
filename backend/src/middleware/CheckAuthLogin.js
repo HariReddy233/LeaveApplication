@@ -24,10 +24,9 @@ export const CheckEmployeeAuth = async (req, res, next) => {
     
     const decoded = await DecodedToken(token);
 
-    // Get user from database - handle both schema types
+    // Get user from database (uses user_id as primary key)
     let userResult;
     try {
-      // Try new schema first (user_id, first_name, last_name)
       userResult = await database.query(
         `SELECT user_id, email, role, status, password_hash
          FROM users 
@@ -36,14 +35,6 @@ export const CheckEmployeeAuth = async (req, res, next) => {
          LIMIT 1`,
         [decoded.id]
       );
-      
-      // If no result, try with id column (old schema)
-      if (userResult.rows.length === 0) {
-        userResult = await database.query(
-          'SELECT id, email, role, password_hash FROM users WHERE id = $1 AND (is_active = true OR is_active IS NULL) LIMIT 1',
-          [decoded.id]
-        );
-      }
     } catch (dbError) {
       console.error('Auth middleware database error:', dbError);
       throw CreateError("Database error", 500);
@@ -55,7 +46,7 @@ export const CheckEmployeeAuth = async (req, res, next) => {
 
     const user = userResult.rows[0];
     req.Email = user.email;
-    req.UserId = user.user_id || user.id;
+    req.UserId = user.user_id;
     req.Password = user.password_hash;
     req.Role = user.role || 'employee';
 

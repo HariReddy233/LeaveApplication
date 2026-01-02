@@ -20,11 +20,9 @@ export const authenticateToken = async (req, res, next) => {
       return res.status(403).json({ error: 'Invalid or expired token' });
     }
 
-    // Get user from database to ensure they still exist and are active
-    // Handle both schema types (user_id or id, status or is_active)
+    // Get user from database (uses user_id as primary key)
     let userResult;
     try {
-      // Try new schema first (user_id, status)
       userResult = await database.query(
         `SELECT user_id, email, role, status 
          FROM users 
@@ -33,14 +31,6 @@ export const authenticateToken = async (req, res, next) => {
          LIMIT 1`,
         [decoded.id]
       );
-      
-      // If no result, try with id column (old schema)
-      if (userResult.rows.length === 0) {
-        userResult = await database.query(
-          'SELECT id, email, role FROM users WHERE id = $1 AND (is_active = true OR is_active IS NULL) LIMIT 1',
-          [decoded.id]
-        );
-      }
     } catch (dbError) {
       console.error('Auth middleware database error:', dbError);
       return res.status(500).json({ error: 'Database error', message: dbError.message });
@@ -52,7 +42,7 @@ export const authenticateToken = async (req, res, next) => {
 
     const user = userResult.rows[0];
     req.user = {
-      id: user.user_id || user.id,
+      id: user.user_id,
       email: user.email,
       role: user.role,
     };

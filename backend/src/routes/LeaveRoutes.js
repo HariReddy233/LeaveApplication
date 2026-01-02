@@ -5,7 +5,7 @@ const LeaveRoutes = express.Router();
 //Internal Lib Import
 import LeaveControllers from "../controller/Leave/LeaveControllers.js";
 import { CheckEmployeeAuth, CheckAdminAuth, CheckHodAuth } from "../middleware/CheckAuthLogin.js";
-import { CheckPermission, CheckMultiplePermissions } from "../middleware/CheckPermission.js";
+import { CheckPermission, CheckMultiplePermissions, CheckAdminOrPermission } from "../middleware/CheckPermission.js";
 
 //Leave Create
 LeaveRoutes.post(
@@ -133,6 +133,14 @@ LeaveRoutes.post(
 LeaveRoutes.get(
   "/email-action",
   LeaveControllers.EmailApprove,
+);
+
+//Leave Reports (with filters) - Admin always has access, HOD needs reports.view permission
+LeaveRoutes.get(
+  "/Reports",
+  CheckEmployeeAuth,
+  CheckAdminOrPermission('reports.view'),
+  LeaveControllers.LeaveReports,
 );
 
 export default LeaveRoutes;

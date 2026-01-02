@@ -8,7 +8,8 @@ import {
   Circle,
   CheckSquare,
   Calendar,
-  Settings
+  Settings,
+  BarChart3
 } from 'lucide-react';
 import { hasPermission, PermissionKeys } from './permissions';
 
@@ -215,6 +216,14 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
       });
     }
 
+    // Reports - Admin always visible
+    menuItems.push({
+      key: 'Reports',
+      label: 'Reports',
+      url: '/dashboard/reports',
+      icon: createIcon(BarChart3, 'w-5 h-5'),
+    });
+
     // Settings is moved to "Additional menu items" section below the line in DashboardLayout
     // Not included in main menu to avoid duplication
 
@@ -385,6 +394,16 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
         label: 'Update Leave List',
         url: '/dashboard/update-leave-list',
         icon: createIcon(Calendar, 'w-5 h-5'),
+      });
+    }
+
+    // Reports - HOD visible ONLY if enabled in Manage Authorizations
+    if (can(PermissionKeys.REPORTS_VIEW)) {
+      hodMenuItems.push({
+        key: 'Reports',
+        label: 'Reports',
+        url: '/dashboard/reports',
+        icon: createIcon(BarChart3, 'w-5 h-5'),
       });
     }
 

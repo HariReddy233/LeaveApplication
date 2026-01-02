@@ -50,7 +50,8 @@ export const GetAllEmployeesService = async (Request) => {
                  ) as hod_name
                FROM users u
                LEFT JOIN employees e ON e.user_id = u.user_id
-               WHERE u.role IS NOT NULL`;
+               WHERE u.role IS NOT NULL 
+               AND (u.status = 'Active' OR u.status IS NULL OR u.status = '')`;
     const params = [];
     let paramCount = 1;
 
@@ -183,7 +184,8 @@ export const GetAllEmployeesService = async (Request) => {
           ) as hod_name
          FROM users u
          LEFT JOIN employees e ON e.user_id = u.user_id
-         WHERE u.role IS NOT NULL
+         WHERE u.role IS NOT NULL 
+         AND (u.status = 'Active' OR u.status IS NULL OR u.status = '')
          ORDER BY COALESCE(
            NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
            NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
@@ -1910,20 +1912,60 @@ export const DeleteEmployeeService = async (Request) => {
 
     const user = userResult.rows[0];
 
-    // Check if user has pending leave applications
-    const leaveCheck = await database.query(
-      `SELECT COUNT(*) as count FROM leave_applications la
-       JOIN employees e ON la.employee_id = e.employee_id
-       WHERE e.user_id = $1 AND (la.hod_status = 'Pending' OR la.admin_status = 'Pending')`,
-      [userId]
-    );
-
-    const pendingLeaves = parseInt(leaveCheck.rows[0]?.count || 0);
-    if (pendingLeaves > 0) {
-      throw CreateError(`Cannot delete employee: ${pendingLeaves} pending leave application(s) exist. Please process or delete leaves first.`, 400);
+    // Get employee_id first to check for pending leaves
+    let employeeId = null;
+    try {
+      const empCheck = await database.query(
+        'SELECT employee_id FROM employees WHERE user_id = $1 LIMIT 1',
+        [userId]
+      );
+      if (empCheck.rows.length > 0) {
+        employeeId = empCheck.rows[0].employee_id;
+      }
+    } catch (empCheckError) {
+      console.warn('Error checking employee record:', empCheckError.message);
     }
 
-    // Delete employee record first (if exists)
+    // Check if user has pending leave applications (only if employee_id exists)
+    if (employeeId) {
+      const leaveCheck = await database.query(
+        `SELECT COUNT(*) as count FROM leave_applications 
+         WHERE employee_id = $1 AND (hod_status = 'Pending' OR admin_status = 'Pending')`,
+        [employeeId]
+      );
+
+      const pendingLeaves = parseInt(leaveCheck.rows[0]?.count || 0);
+      if (pendingLeaves > 0) {
+        throw CreateError(`Cannot delete employee: ${pendingLeaves} pending leave application(s) exist. Please process or delete leaves first.`, 400);
+      }
+    }
+
+
+    // Delete related records first (in correct order to avoid foreign key violations)
+    // 1. Delete user permissions
+    try {
+      await database.query(
+        'DELETE FROM user_permissions WHERE user_id = $1',
+        [userId]
+      );
+    } catch (permError) {
+      console.warn('Error deleting user permissions:', permError.message);
+      // Continue even if permissions don't exist
+    }
+
+    // 2. Delete employee blocked dates
+    if (employeeId) {
+      try {
+        await database.query(
+          'DELETE FROM employee_blocked_dates WHERE employee_id = $1',
+          [employeeId]
+        );
+      } catch (blockedError) {
+        console.warn('Error deleting employee blocked dates:', blockedError.message);
+      }
+    }
+
+    // 3. Delete employee record (if exists)
     try {
       await database.query(
         'DELETE FROM employees WHERE user_id = $1',
@@ -1934,11 +1976,17 @@ export const DeleteEmployeeService = async (Request) => {
       // Continue even if employee record doesn't exist
     }
 
-    // Soft delete user by setting status = 'Inactive'
+    // 4. Soft delete user by setting status = 'Inactive'
     const result = await database.query(
-      `UPDATE users SET status = 'Inactive', updated_at = NOW() WHERE user_id = $1 RETURNING user_id, email`,
+      `UPDATE users SET status = 'Inactive', updated_at = NOW() WHERE user_id = $1 RETURNING user_id, email, status`,
       [userId]
     );
+
+    if (result.rows.length === 0) {
+      throw CreateError("Failed to update user status", 500);
+    }
+
+    console.log(`✅ Employee deleted successfully: user_id=${userId}, email=${result.rows[0].email}, status=${result.rows[0].status}`);
 
     return {
       message: "Employee deleted successfully",
@@ -1947,7 +1995,7 @@ export const DeleteEmployeeService = async (Request) => {
   } catch (error) {
     console.error('DeleteEmployeeService error:', error);
     if (error.status) throw error;
-    throw CreateError("Failed to delete employee", 500);
+    throw CreateError(error.message || "Failed to delete employee", 500);
   }
 };
 

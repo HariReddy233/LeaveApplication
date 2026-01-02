@@ -89,10 +89,28 @@ export default function ApplyLeavePage() {
       const response = await api.get(`/Leave/LeaveDetails/${leaveId}`);
       if (response.data?.data) {
         const leave = response.data.data;
+        
+        // Format dates to YYYY-MM-DD for date input fields
+        const formatDateForInput = (dateStr: string) => {
+          if (!dateStr) return '';
+          try {
+            const date = new Date(dateStr);
+            if (isNaN(date.getTime())) return '';
+            // Format as YYYY-MM-DD (local date, not UTC)
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+          } catch (e) {
+            console.warn('Failed to format date:', dateStr, e);
+            return dateStr.split('T')[0]; // Fallback: take date part before T
+          }
+        };
+        
         setFormData({
           leave_type: leave.leave_type || '',
-          start_date: leave.start_date || '',
-          end_date: leave.end_date || '',
+          start_date: formatDateForInput(leave.start_date || ''),
+          end_date: formatDateForInput(leave.end_date || ''),
           number_of_days: leave.number_of_days?.toString() || '',
           leave_details: leave.reason || leave.leave_details || '',
         });
@@ -557,7 +575,7 @@ export default function ApplyLeavePage() {
             )}
 
             {/* Submit Button */}
-            <div className="mt-4">
+            <div className="mt-4 flex gap-3">
               <button
                 type="submit"
                 disabled={loading || (!isUpdate && balanceError !== '') || overlapError !== ''}
@@ -566,6 +584,16 @@ export default function ApplyLeavePage() {
               >
                 {loading ? 'Submitting...' : isUpdate ? 'Update Leave' : 'Apply for Leave'}
               </button>
+              {isUpdate && (
+                <button
+                  type="button"
+                  onClick={() => router.push('/dashboard/leaves')}
+                  className="bg-gray-200 text-gray-700 px-6 py-2.5 rounded-lg font-medium hover:bg-gray-300 transition-colors text-sm"
+                  style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
+                >
+                  Cancel
+                </button>
+              )}
               {!isUpdate && (balanceError || overlapError) && (
                 <p className="mt-2 text-xs text-gray-500">
                   {balanceError ? 'Please adjust your leave request or contact HR to increase your leave balance.' : ''}

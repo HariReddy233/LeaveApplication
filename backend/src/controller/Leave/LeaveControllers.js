@@ -15,6 +15,7 @@ import {
   CheckOverlappingLeavesService,
   BulkApproveLeaveHodService,
   BulkApproveLeaveAdminService,
+  GetLeaveReportsService,
 } from "../../services/Leave/LeaveService.js";
 import { EmailApprovalService } from "../../services/Leave/EmailApprovalService.js";
 
@@ -393,6 +394,21 @@ export const EmailApprove = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Get Leave Reports (with filters)
+ * @access private
+ * @route /api/v1/Leave/Reports
+ * @method GET
+ */
+export const LeaveReports = async (req, res, next) => {
+  try {
+    const result = await GetLeaveReportsService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export default {
   LeaveCreate,
   LeaveList,
@@ -410,5 +426,6 @@ export default {
   BulkApproveHod,
   BulkApprove,
   EmailApprove,
+  LeaveReports,
 };
 

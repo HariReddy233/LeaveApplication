@@ -293,9 +293,11 @@ export default function UpdateLeaveListPage() {
   const handleEditHoliday = (holiday: OrganizationHoliday) => {
     setEditingHoliday(holiday);
     setEntryMode('single'); // Always use single mode for editing
+    // Fix date shift bug: Extract date part only (YYYY-MM-DD) to avoid timezone conversion
+    const dateStr = holiday.holiday_date.split('T')[0];
     setHolidayForm({
       holiday_name: holiday.holiday_name,
-      holiday_date: holiday.holiday_date.split('T')[0],
+      holiday_date: dateStr,
       is_recurring: holiday.is_recurring,
       recurring_year: holiday.recurring_year?.toString() || '',
       team: holiday.team || 'all',
@@ -786,11 +788,16 @@ export default function UpdateLeaveListPage() {
                   holidays.map((holiday) => (
                     <tr key={holiday.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {new Date(holiday.holiday_date).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                        })}
+                        {(() => {
+                          // Fix date shift bug: Parse date as YYYY-MM-DD without timezone conversion
+                          const dateStr = holiday.holiday_date.split('T')[0]; // Get date part only
+                          const [year, month, day] = dateStr.split('-');
+                          return new Date(parseInt(year), parseInt(month) - 1, parseInt(day)).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                          });
+                        })()}
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-900">
                         {holiday.holiday_name}

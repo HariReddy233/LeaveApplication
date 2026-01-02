@@ -83,29 +83,42 @@ export const DashboardSummaryHodService = async (Request) => {
  * Shows all leaves grouped by AdminStatus (Admin is an approver, not an employee)
  */
 export const DashboardSummaryAdminService = async (Request) => {
-  // Get total count of all leaves (Admin needs to see all leaves for approval)
-  const totalResult = await database.query(
-    `SELECT COUNT(*) as count FROM leave_applications`
-  );
-  const total = parseInt(totalResult.rows[0].count);
+  try {
+    // Get total count of all leaves (Admin needs to see all leaves for approval)
+    const totalResult = await database.query(
+      `SELECT COUNT(*) as count FROM leave_applications`
+    );
+    const total = parseInt(totalResult.rows[0]?.count || 0);
 
-  // Group by AdminStatus (all leaves, not filtered by HOD status)
-  // Handle NULL values by treating them as 'Pending'
-  const statusResult = await database.query(
-    `SELECT 
-      COALESCE(admin_status, 'Pending') as _id,
-      COUNT(*) as count
-    FROM leave_applications
-    GROUP BY COALESCE(admin_status, 'Pending')`
-  );
+    // Group by AdminStatus (all leaves, not filtered by HOD status)
+    // Handle NULL values by treating them as 'Pending'
+    const statusResult = await database.query(
+      `SELECT 
+        COALESCE(admin_status, 'Pending') as _id,
+        COUNT(*) as count
+      FROM leave_applications
+      GROUP BY COALESCE(admin_status, 'Pending')`
+    );
 
-  return {
-    Total: [{ count: total }],
-    Data: statusResult.rows.map(row => ({
-      _id: row._id || 'Pending',
-      count: parseInt(row.count)
-    }))
-  };
+    return {
+      Total: [{ count: total }],
+      Data: statusResult.rows.map(row => ({
+        _id: row._id || 'Pending',
+        count: parseInt(row.count || 0)
+      }))
+    };
+  } catch (error) {
+    console.error('DashboardSummaryAdminService error:', error);
+    // Return default values instead of throwing
+    return {
+      Total: [{ count: 0 }],
+      Data: [
+        { _id: 'Pending', count: 0 },
+        { _id: 'Approved', count: 0 },
+        { _id: 'Rejected', count: 0 }
+      ]
+    };
+  }
 };
 
 

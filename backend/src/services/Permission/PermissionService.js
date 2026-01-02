@@ -12,16 +12,30 @@ export const InitializeRequiredPermissionsService = async () => {
     console.log('🔄 Initializing required permissions...');
     
     // Define all required permissions
-    const requiredPermissions = [
-      {
-        permission_key: 'leave.update_list',
-        permission_name: 'Update Leave List',
-        description: 'Allow user to update organization leave dates and blocked dates',
-        category: 'leave',
-        is_active: true
-      },
-      // Add more permissions here as needed in the future
-    ];
+        const requiredPermissions = [
+          {
+            permission_key: 'leave.update_list',
+            permission_name: 'Update Leave List',
+            description: 'Allow user to update organization leave dates and blocked dates',
+            category: 'leave',
+            is_active: true
+          },
+          {
+            permission_key: 'reports.view',
+            permission_name: 'View Reports',
+            description: 'Allow user to view leave reports',
+            category: 'reports',
+            is_active: true
+          },
+          {
+            permission_key: 'reports.export',
+            permission_name: 'Export Reports',
+            description: 'Allow user to export reports to Excel',
+            category: 'reports',
+            is_active: true
+          },
+          // Add more permissions here as needed in the future
+        ];
     
     let createdCount = 0;
     let updatedCount = 0;
@@ -486,6 +500,11 @@ export const CheckUserPermissionService = async (userId, permissionKey) => {
  */
 export const GetUserPermissionKeysService = async (userId) => {
   try {
+    if (!userId) {
+      console.warn('GetUserPermissionKeysService: userId is missing');
+      return [];
+    }
+
     // First check if user is admin
     const userResult = await database.query(
       'SELECT role FROM users WHERE user_id = $1',
@@ -495,26 +514,39 @@ export const GetUserPermissionKeysService = async (userId) => {
     if (userResult.rows.length > 0 && 
         (userResult.rows[0].role?.toLowerCase() === 'admin')) {
       // Admin has all permissions - return all active permission keys
-      const allPerms = await database.query(
-        'SELECT permission_key FROM permissions WHERE is_active = TRUE'
-      );
-      return allPerms.rows.map(p => p.permission_key);
+      try {
+        const allPerms = await database.query(
+          'SELECT permission_key FROM permissions WHERE is_active = TRUE'
+        );
+        return allPerms.rows.map(p => p.permission_key);
+      } catch (permError) {
+        console.error('GetUserPermissionKeysService: Error fetching all permissions:', permError);
+        // If permissions table doesn't exist, return empty array
+        return [];
+      }
     }
     
     // Get user's specific permissions
-    const result = await database.query(
-      `SELECT p.permission_key
-       FROM user_permissions up
-       JOIN permissions p ON up.permission_id = p.permission_id
-       WHERE up.user_id = $1 
-       AND up.granted = TRUE 
-       AND p.is_active = TRUE`,
-      [userId]
-    );
-    
-    return result.rows.map(p => p.permission_key);
+    try {
+      const result = await database.query(
+        `SELECT p.permission_key
+         FROM user_permissions up
+         JOIN permissions p ON up.permission_id = p.permission_id
+         WHERE up.user_id = $1 
+         AND up.granted = TRUE 
+         AND p.is_active = TRUE`,
+        [userId]
+      );
+      
+      return result.rows.map(p => p.permission_key);
+    } catch (userPermError) {
+      console.error('GetUserPermissionKeysService: Error fetching user permissions:', userPermError);
+      // If user_permissions table doesn't exist or has issues, return empty array
+      return [];
+    }
   } catch (error) {
     console.error('GetUserPermissionKeysService error:', error);
+    // Always return empty array instead of throwing
     return [];
   }
 };
