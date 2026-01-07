@@ -3,113 +3,20 @@ import database from "../../config/database.js";
 import { CreateError } from "../../helper/ErrorHandler.js";
 
 /**
- * Initialize Required Permissions
- * Dynamically creates permissions if they don't exist
- * This ensures all required permissions are available without manual SQL scripts
- */
-export const InitializeRequiredPermissionsService = async () => {
-  try {
-    console.log('🔄 Initializing required permissions...');
-    
-    // Define all required permissions
-        const requiredPermissions = [
-          {
-            permission_key: 'leave.update_list',
-            permission_name: 'Update Leave List',
-            description: 'Allow user to update organization leave dates and blocked dates',
-            category: 'leave',
-            is_active: true
-          },
-          {
-            permission_key: 'reports.view',
-            permission_name: 'View Reports',
-            description: 'Allow user to view leave reports',
-            category: 'reports',
-            is_active: true
-          },
-          {
-            permission_key: 'reports.export',
-            permission_name: 'Export Reports',
-            description: 'Allow user to export reports to Excel',
-            category: 'reports',
-            is_active: true
-          },
-          // Add more permissions here as needed in the future
-        ];
-    
-    let createdCount = 0;
-    let updatedCount = 0;
-    
-    for (const perm of requiredPermissions) {
-      try {
-        // Check if permission exists
-        const existing = await database.query(
-          'SELECT permission_id, permission_key FROM permissions WHERE permission_key = $1',
-          [perm.permission_key]
-        );
-        
-        if (existing.rows.length === 0) {
-          // Create new permission
-          await database.query(
-            `INSERT INTO permissions (permission_key, permission_name, description, category, is_active)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [perm.permission_key, perm.permission_name, perm.description, perm.category, perm.is_active]
-          );
-          console.log(`✅ Created permission: ${perm.permission_key}`);
-          createdCount++;
-        } else {
-          // Update existing permission to ensure it's correct
-          await database.query(
-            `UPDATE permissions 
-             SET permission_name = $1, 
-                 description = $2, 
-                 category = $3, 
-                 is_active = $4,
-                 updated_at = NOW()
-             WHERE permission_key = $5`,
-            [perm.permission_name, perm.description, perm.category, perm.is_active, perm.permission_key]
-          );
-          console.log(`🔄 Updated permission: ${perm.permission_key}`);
-          updatedCount++;
-        }
-      } catch (error) {
-        console.error(`❌ Error initializing permission ${perm.permission_key}:`, error.message);
-        // Continue with other permissions even if one fails
-      }
-    }
-    
-    console.log(`✅ Permission initialization complete. Created: ${createdCount}, Updated: ${updatedCount}`);
-    return {
-      created: createdCount,
-      updated: updatedCount,
-      total: requiredPermissions.length
-    };
-  } catch (error) {
-    console.error('❌ Error initializing permissions:', error);
-    throw CreateError("Failed to initialize permissions", 500);
-  }
-};
-
-/**
  * Get All Permissions
  * Returns list of all available permissions
- * Automatically ensures required permissions exist before returning
  */
 export const GetAllPermissionsService = async () => {
   try {
-    // Ensure required permissions exist (dynamic initialization)
-    // This ensures permissions are always available even if server startup init failed
-    try {
-      await InitializeRequiredPermissionsService();
-    } catch (initError) {
-      // Log but don't fail - continue to fetch existing permissions
-      console.warn('⚠️ Could not initialize permissions in GetAllPermissionsService:', initError.message);
-    }
-    
     const result = await database.query(
       `SELECT permission_id, permission_key, permission_name, description, category, is_active
        FROM permissions
        WHERE is_active = TRUE
+       AND LOWER(category) != 'authorization'
+       AND LOWER(category) != 'general'
+       AND permission_key != 'department.view'
+       AND permission_key != 'employee.view'
+       AND permission_key != 'reports.export'
        ORDER BY category, permission_name`
     );
     
@@ -131,7 +38,7 @@ export const GetUserPermissionsService = async (Request) => {
   const requestingUserId = Request.UserId;
   
   try {
-    // Get user permissions with permission details
+    // Get user permissions with permission details (excluding authorization, general, and specific view permissions)
     const result = await database.query(
       `SELECT 
         p.permission_id,
@@ -143,7 +50,14 @@ export const GetUserPermissionsService = async (Request) => {
         up.granted_at
        FROM user_permissions up
        JOIN permissions p ON up.permission_id = p.permission_id
-       WHERE up.user_id = $1 AND up.granted = TRUE AND p.is_active = TRUE
+       WHERE up.user_id = $1 
+       AND up.granted = TRUE 
+       AND p.is_active = TRUE
+       AND LOWER(p.category) != 'authorization'
+       AND LOWER(p.category) != 'general'
+       AND p.permission_key != 'department.view'
+       AND p.permission_key != 'employee.view'
+       AND p.permission_key != 'reports.export'
        ORDER BY p.category, p.permission_name`,
       [userId]
     );
@@ -271,11 +185,6 @@ export const AssignPermissionService = async (Request) => {
       const permKey = (permission.permission_key || '').toLowerCase();
       const permCategory = (permission.category || '').toLowerCase();
       
-      // Block Authorization permissions for Employees
-      if (permCategory === 'authorization') {
-        throw CreateError("Employees cannot be assigned Authorization permissions", 403);
-      }
-      
       // Block Department permissions for Employees
       if (permCategory === 'department') {
         throw CreateError("Employees cannot be assigned Department permissions", 403);
@@ -402,8 +311,7 @@ export const BulkAssignPermissionsService = async (Request) => {
         const permCategory = (perm.category || '').toLowerCase();
         
         // Block restricted categories for Employees
-        if (permCategory === 'authorization' || 
-            permCategory === 'department' || 
+        if (permCategory === 'department' || 
             permCategory === 'employee' ||
             permCategory === 'permissions' ||
             permCategory === 'leave type' ||
@@ -500,11 +408,6 @@ export const CheckUserPermissionService = async (userId, permissionKey) => {
  */
 export const GetUserPermissionKeysService = async (userId) => {
   try {
-    if (!userId) {
-      console.warn('GetUserPermissionKeysService: userId is missing');
-      return [];
-    }
-
     // First check if user is admin
     const userResult = await database.query(
       'SELECT role FROM users WHERE user_id = $1',
@@ -513,41 +416,114 @@ export const GetUserPermissionKeysService = async (userId) => {
     
     if (userResult.rows.length > 0 && 
         (userResult.rows[0].role?.toLowerCase() === 'admin')) {
-      // Admin has all permissions - return all active permission keys
+      // Admin has all permissions - return all active permission keys (excluding authorization, general, and specific view permissions)
+      const allPerms = await database.query(
+        `SELECT permission_key FROM permissions 
+         WHERE is_active = TRUE 
+         AND LOWER(category) != 'authorization'
+         AND LOWER(category) != 'general'
+         AND permission_key != 'department.view'
+         AND permission_key != 'employee.view'
+         AND permission_key != 'reports.export'`
+      );
+      return allPerms.rows.map(p => p.permission_key);
+    }
+    
+    // Get user's specific permissions (excluding authorization, general, and specific view permissions)
+    const result = await database.query(
+      `SELECT p.permission_key
+       FROM user_permissions up
+       JOIN permissions p ON up.permission_id = p.permission_id
+       WHERE up.user_id = $1 
+       AND up.granted = TRUE 
+       AND p.is_active = TRUE
+       AND LOWER(p.category) != 'authorization'
+       AND LOWER(p.category) != 'general'
+       AND p.permission_key != 'department.view'
+       AND p.permission_key != 'employee.view'
+       AND p.permission_key != 'reports.export'`,
+      [userId]
+    );
+    
+    return result.rows.map(p => p.permission_key);
+  } catch (error) {
+    console.error('GetUserPermissionKeysService error:', error);
+    return [];
+  }
+};
+
+/**
+ * Initialize Required Permissions
+ * Creates all required permissions if they don't exist
+ */
+export const InitializeRequiredPermissionsService = async () => {
+  try {
+    // Get all required permissions from the system
+    const requiredPermissions = [
+      'dashboard.view',
+      'leave.apply',
+      'leave.view.own',
+      'leave.view.all',
+      'leave.edit',
+      'leave.delete',
+      'leave.approve',
+      'leave.reject',
+      'employee.view',
+      'employee.create',
+      'employee.edit',
+      'employee.delete',
+      'department.view',
+      'department.create',
+      'department.edit',
+      'department.delete',
+      'leavetype.view',
+      'leavetype.create',
+      'leavetype.edit',
+      'leavetype.delete',
+      'reports.view',
+      'permission.view',
+      'permission.assign',
+      'permission.revoke'
+    ];
+    
+    const created = [];
+    const existing = [];
+    
+    for (const permissionKey of requiredPermissions) {
       try {
-        const allPerms = await database.query(
-          'SELECT permission_key FROM permissions WHERE is_active = TRUE'
+        // Generate a readable permission name from the key
+        const permissionName = permissionKey
+          .split('.')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ');
+        
+        const result = await database.query(
+          `INSERT INTO permissions (permission_key, permission_name, description, is_active, created_at)
+           VALUES ($1, $2, $3, TRUE, NOW())
+           ON CONFLICT (permission_key) DO NOTHING
+           RETURNING *`,
+          [permissionKey, permissionName, `Permission: ${permissionKey}`]
         );
-        return allPerms.rows.map(p => p.permission_key);
-      } catch (permError) {
-        console.error('GetUserPermissionKeysService: Error fetching all permissions:', permError);
-        // If permissions table doesn't exist, return empty array
-        return [];
+        
+        if (result.rows.length > 0) {
+          created.push(permissionKey);
+        } else {
+          existing.push(permissionKey);
+        }
+      } catch (err) {
+        console.error(`Error initializing permission ${permissionKey}:`, err);
       }
     }
     
-    // Get user's specific permissions
-    try {
-      const result = await database.query(
-        `SELECT p.permission_key
-         FROM user_permissions up
-         JOIN permissions p ON up.permission_id = p.permission_id
-         WHERE up.user_id = $1 
-         AND up.granted = TRUE 
-         AND p.is_active = TRUE`,
-        [userId]
-      );
-      
-      return result.rows.map(p => p.permission_key);
-    } catch (userPermError) {
-      console.error('GetUserPermissionKeysService: Error fetching user permissions:', userPermError);
-      // If user_permissions table doesn't exist or has issues, return empty array
-      return [];
-    }
+    return {
+      message: `Permissions initialized. Created: ${created.length}, Already existed: ${existing.length}`,
+      created,
+      existing,
+      total: requiredPermissions.length
+    };
   } catch (error) {
-    console.error('GetUserPermissionKeysService error:', error);
-    // Always return empty array instead of throwing
-    return [];
+    console.error('InitializeRequiredPermissionsService error:', error);
+    throw CreateError("Failed to initialize permissions", 500);
   }
 };
 

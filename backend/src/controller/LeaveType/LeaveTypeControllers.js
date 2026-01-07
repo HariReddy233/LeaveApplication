@@ -14,7 +14,7 @@ import {
  */
 export const LeaveTypeList = async (req, res, next) => {
   try {
-    const result = await GetLeaveTypeListService();
+    const result = await GetLeaveTypeListService(req);
     res.json(result);
   } catch (error) {
     next(error);

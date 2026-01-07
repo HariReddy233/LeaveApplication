@@ -80,16 +80,18 @@ export const GetCurrentUser = async (req, res, next) => {
       return res.status(401).json({ error: 'Invalid or expired token' });
     }
 
-    // Get user from database (uses user_id as primary key)
+    // Get user from database with location from employees table
     let userResult;
     try {
       userResult = await database.query(
-        `SELECT user_id, first_name, last_name, 
-         COALESCE(first_name || ' ' || last_name, first_name, last_name, email) as full_name,
-         email, role, status, department, designation
-         FROM users 
-         WHERE user_id = $1 
-         AND (status = 'Active' OR status IS NULL)
+        `SELECT u.user_id, u.first_name, u.last_name, 
+         COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
+         u.email, u.role, u.status, u.department, u.designation,
+         e.location
+         FROM users u
+         LEFT JOIN employees e ON e.user_id = u.user_id
+         WHERE u.user_id = $1 
+         AND (u.status = 'Active' OR u.status IS NULL)
          LIMIT 1`,
         [decoded.id]
       );
@@ -113,6 +115,7 @@ export const GetCurrentUser = async (req, res, next) => {
         role: user.role || 'employee',
         department: user.department,
         designation: user.designation,
+        location: user.location || null,
       }
     });
   } catch (error) {

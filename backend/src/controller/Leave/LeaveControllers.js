@@ -13,6 +13,7 @@ import {
   FilterLeaveByStatusHodService,
   GetLeaveBalanceService,
   CheckOverlappingLeavesService,
+  CalculateWorkingDaysService,
   BulkApproveLeaveHodService,
   BulkApproveLeaveAdminService,
   GetLeaveReportsService,
@@ -209,6 +210,21 @@ export const LeaveBalance = async (req, res, next) => {
 export const CheckOverlappingLeaves = async (req, res, next) => {
   try {
     const result = await CheckOverlappingLeavesService(req);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc Calculate Working Days
+ * @access private
+ * @route /api/v1/Leave/CalculateWorkingDays
+ * @method POST or GET
+ */
+export const CalculateWorkingDays = async (req, res, next) => {
+  try {
+    const result = await CalculateWorkingDaysService(req);
     res.json(result);
   } catch (error) {
     next(error);
@@ -423,6 +439,7 @@ export default {
   LeaveApproveHod,
   LeaveBalance,
   CheckOverlappingLeaves,
+  CalculateWorkingDays,
   BulkApproveHod,
   BulkApprove,
   EmailApprove,

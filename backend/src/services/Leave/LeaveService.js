@@ -3,8 +3,71 @@ import database from "../../config/database.js";
 import { CreateError } from "../../helper/ErrorHandler.js";
 import sseService from "../SSE/SSEService.js";
 import { createApprovalToken, getBaseUrl } from "../../utils/approvalToken.js";
-import { calculateDaysExcludingWeekends, getDatesInRange, formatDateString } from "../../utils/dateUtils.js";
-import { extractCountryCodeFromPhone } from "../../utils/countryCodeUtils.js";
+
+/**
+ * Helper function to recalculate leave balance based on current approved leaves
+ * This ensures balance is always accurate by recalculating from source of truth
+ * @param {number} employeeId - The employee ID
+ * @param {string} leaveType - The leave type name
+ * @param {number} year - The year
+ */
+const recalculateLeaveBalance = async (employeeId, leaveType, year) => {
+  try {
+    // Get default total_balance from leave_types if balance doesn't exist
+    const leaveTypeResult = await database.query(
+      `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+      [leaveType]
+    );
+    
+    let defaultBalance = 0;
+    if (leaveTypeResult.rows.length > 0) {
+      const lt = leaveTypeResult.rows[0];
+      defaultBalance = lt.max_days || 0;
+    }
+    
+    // Calculate used_balance as sum of all leaves that have at least one approval
+    // A leave is counted if:
+    // - At least one approver has approved (hod_status = 'Approved' OR admin_status = 'Approved')
+    // - AND no approver has rejected (hod_status != 'Rejected' AND admin_status != 'Rejected')
+    // This means: count if approved by ANY, but don't count if rejected by ANY
+    // Handle NULL values properly - NULL means Pending, so treat as not approved/rejected
+    // Use date range instead of EXTRACT for better index usage
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${year}-12-31`;
+    const approvedLeavesSum = await database.query(
+      `SELECT COALESCE(SUM(number_of_days), 0) as total_days
+       FROM leave_applications
+       WHERE employee_id = $1 
+       AND leave_type = $2
+       AND start_date >= $3::date
+       AND start_date <= $4::date
+       AND (
+         (UPPER(TRIM(COALESCE(hod_status, 'Pending'))) = 'APPROVED' OR UPPER(TRIM(COALESCE(admin_status, 'Pending'))) = 'APPROVED')
+         AND UPPER(TRIM(COALESCE(hod_status, 'Pending'))) != 'REJECTED'
+         AND UPPER(TRIM(COALESCE(admin_status, 'Pending'))) != 'REJECTED'
+       )`,
+      [employeeId, leaveType, yearStart, yearEnd]
+    );
+    
+    const usedDays = parseFloat(approvedLeavesSum.rows[0]?.total_days || 0);
+    
+    // First, ensure the balance record exists with correct total_balance
+    // Note: remaining_balance is a generated column - do NOT insert/update it directly
+    await database.query(
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+       VALUES ($1, $2, $4, $5, $3)
+       ON CONFLICT (employee_id, leave_type, year) 
+       DO UPDATE SET 
+         total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
+         used_balance = $5,
+         updated_at = NOW()`,
+      [employeeId, leaveType, year, defaultBalance, usedDays]
+    );
+  } catch (error) {
+    console.error(`❌ Failed to recalculate leave balance:`, error);
+    throw error;
+  }
+};
 
 /**
  * Create Leave Application
@@ -19,141 +82,87 @@ export const CreateLeaveService = async (Request) => {
     throw CreateError("Leave type, start date, and end date are required", 400);
   }
 
-  // Get employee_id from user_id if not provided
+  // Get employee_id and location FIRST (needed for accurate day calculation)
   let empId = employee_id;
+  let employeeLocation = null;
   if (!empId) {
     const empResult = await database.query(
-      'SELECT employee_id FROM employees WHERE user_id = $1 LIMIT 1',
+      'SELECT employee_id, location FROM employees WHERE user_id = $1 LIMIT 1',
       [UserId]
     );
     if (empResult.rows.length === 0) {
       throw CreateError("Employee record not found for user", 404);
     }
     empId = empResult.rows[0].employee_id;
-  }
-
-  // Get user's location (from employees.location, fallback to users.country_code)
-  // This determines which country-specific holidays to check
-  let userLocation = null;
-  try {
-    // First try to get location from employees table (primary source)
+    employeeLocation = empResult.rows[0].location;
+  } else {
+    // Get location for provided employee_id
     const empResult = await database.query(
-      `SELECT e.location, u.country_code 
-       FROM employees e
-       JOIN users u ON e.user_id = u.user_id
-       WHERE e.user_id = $1
-       LIMIT 1`,
-      [UserId]
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [empId]
     );
-    
     if (empResult.rows.length > 0) {
-      // Use employees.location as primary source, fallback to users.country_code
-      userLocation = empResult.rows[0].location || empResult.rows[0].country_code;
-    } else {
-      // If no employee record, try users table directly
-      const userResult = await database.query(
-        `SELECT country_code FROM users WHERE user_id = $1 LIMIT 1`,
-        [UserId]
-      );
-      if (userResult.rows.length > 0) {
-        userLocation = userResult.rows[0].country_code;
-      }
+      employeeLocation = empResult.rows[0].location;
     }
-    
-    // Normalize location to 'US' or 'IN' if needed
-    if (userLocation) {
-      const locationUpper = String(userLocation).toUpperCase().trim();
-      if (locationUpper === 'US' || locationUpper === 'UNITED STATES') {
-        userLocation = 'US';
-      } else if (locationUpper === 'IN' || locationUpper === 'INDIA') {
-        userLocation = 'IN';
-      } else {
-        // If location doesn't match US/IN, set to null (user won't see country-specific holidays)
-        userLocation = null;
-      }
-    }
-  } catch (err) {
-    console.warn('Could not fetch user location:', err.message);
-    userLocation = null;
-  }
-  
-  // Check for blocked dates (organization holidays + country-specific holidays + employee-specific blocked dates)
-  const datesInRange = getDatesInRange(start_date, end_date);
-  const dateStrings = datesInRange.map(d => formatDateString(d));
-  
-  // Check organization holidays (All Teams) - these apply to everyone
-  const currentYear = new Date(start_date).getFullYear();
-  const orgHolidaysCheck = await database.query(
-    `SELECT holiday_date, holiday_name
-     FROM organization_holidays
-     WHERE holiday_date = ANY($1::date[])
-     AND (
-       (is_recurring = true AND (recurring_year IS NULL OR recurring_year = $2))
-       OR (is_recurring = false AND EXTRACT(YEAR FROM holiday_date) = $2)
-     )`,
-    [dateStrings, currentYear]
-  );
-  
-  // Check country-specific holidays ONLY if user has a matching location
-  // Only check holidays where country_code matches user's location (US or IN)
-  let countryHolidaysCheck = { rows: [] };
-  if (userLocation && (userLocation === 'US' || userLocation === 'IN')) {
-    countryHolidaysCheck = await database.query(
-      `SELECT holiday_date, holiday_name
-       FROM holidays
-       WHERE country_code = $1 AND holiday_date = ANY($2::date[]) AND is_active = true`,
-      [userLocation, dateStrings]
-    ).catch(() => ({ rows: [] })); // Ignore if table doesn't exist yet
-  }
-  
-  // Check employee-specific blocked dates
-  const empBlockedCheck = await database.query(
-    `SELECT blocked_date, reason
-     FROM employee_blocked_dates
-     WHERE employee_id = $1 AND blocked_date = ANY($2::date[])`,
-    [empId, dateStrings]
-  );
-  
-  // Combine blocked dates (holidays and employee-specific)
-  const blockedDates = [
-    ...orgHolidaysCheck.rows.map(r => ({ date: r.holiday_date, reason: r.holiday_name, type: 'organization_holiday' })),
-    ...countryHolidaysCheck.rows.map(r => ({ date: r.holiday_date, reason: r.holiday_name, type: 'country_holiday' })),
-    ...empBlockedCheck.rows.map(r => ({ date: r.blocked_date, reason: r.reason, type: 'employee_blocked' }))
-  ];
-  
-  if (blockedDates.length > 0) {
-    const blockedDateStr = blockedDates[0].date;
-    const blockedReason = blockedDates[0].reason || 'blocked date';
-    throw CreateError(
-      `Leave is not allowed on ${blockedDateStr}. ${blockedReason}. Please select different dates.`,
-      400
-    );
   }
 
-  // Calculate number of days excluding weekends AND holidays
-  // Get all blocked date strings for exclusion
-  const blockedDateStrings = [
-    ...orgHolidaysCheck.rows.map(r => formatDateString(r.holiday_date)),
-    ...countryHolidaysCheck.rows.map(r => formatDateString(r.holiday_date)),
-    ...empBlockedCheck.rows.map(r => formatDateString(r.blocked_date))
-  ];
-  
-  // Count working days (exclude weekends and holidays)
-  let workingDays = 0;
-  for (const date of datesInRange) {
-    const dateStr = formatDateString(date);
-    const dayOfWeek = date.getDay();
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // Sunday = 0, Saturday = 6
-    const isHoliday = blockedDateStrings.includes(dateStr);
+  // ALWAYS calculate number of days excluding holidays and weekends
+  // Never use provided number_of_days - always recalculate to ensure accuracy
+  let numDays = 0;
+  try {
+    const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
+    numDays = await calculateLeaveDaysExcludingHolidays(start_date, end_date, employeeLocation, database);
     
-    // Count only working days (not weekends, not holidays)
-    if (!isWeekend && !isHoliday) {
-      workingDays++;
+    if (!numDays || numDays === 0) {
+      throw CreateError("Invalid date range: No working days found between start and end date. Please check if dates include only weekends/holidays.", 400);
+    }
+    console.log(`✅ Calculated ${numDays} working days (excluding holidays and weekends) for employee location: ${employeeLocation || 'N/A'}`);
+  } catch (calcError) {
+    // If it's already a CreateError, rethrow it
+    if (calcError.status || calcError.statusCode) {
+      throw calcError;
+    }
+    // For other errors, throw a descriptive error
+    console.error('❌ Failed to calculate working days:', calcError);
+    throw CreateError(`Failed to calculate working days: ${calcError.message}. Please ensure dates are valid and employee location is set.`, 400);
+  }
+
+  // Validate leave type matches employee location
+  // Handle case where location column might not exist
+  let leaveTypeCheck;
+  try {
+    leaveTypeCheck = await database.query(
+      `SELECT name, location FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+      [leave_type]
+    );
+  } catch (colError) {
+    // Location column doesn't exist - try without it
+    if (colError.code === '42703') {
+      leaveTypeCheck = await database.query(
+        `SELECT name FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+        [leave_type]
+      );
+    } else {
+      throw colError;
     }
   }
   
-  // Use calculated working days (excludes weekends and holidays)
-  const numDays = workingDays;
+  if (leaveTypeCheck.rows.length === 0) {
+    throw CreateError(`Leave type "${leave_type}" not found or is inactive`, 400);
+  }
+  
+  // Only validate location if column exists and value is set
+  const leaveTypeLocation = leaveTypeCheck.rows[0].location;
+  if (leaveTypeLocation !== undefined && leaveTypeLocation !== null) {
+    // Allow if leave type location is "All", null, or matches employee location
+    if (leaveTypeLocation && leaveTypeLocation !== 'All' && leaveTypeLocation !== employeeLocation) {
+      throw CreateError(
+        `Leave type "${leave_type}" is only available for location "${leaveTypeLocation}". Your location is "${employeeLocation || 'not set'}".`,
+        400
+      );
+    }
+  }
+  // If location column doesn't exist or is null, treat as "IN" (India) - allow all
 
   // Check for overlapping leave dates (only for pending or approved leaves)
   const overlapCheck = await database.query(
@@ -181,7 +190,15 @@ export const CreateLeaveService = async (Request) => {
   }
 
   // Check leave exhaustion - validate available balance before creating leave
+  // First, recalculate balance to ensure we have the latest data
   const year = new Date(start_date).getFullYear();
+  try {
+    await recalculateLeaveBalance(empId, leave_type, year);
+  } catch (recalcError) {
+    console.warn('Failed to recalculate balance before validation, using existing balance:', recalcError);
+  }
+  
+  // Get the recalculated balance
   const balanceCheck = await database.query(
     `SELECT total_balance, used_balance, remaining_balance
      FROM leave_balance
@@ -193,7 +210,7 @@ export const CreateLeaveService = async (Request) => {
   // Get default balance from leave_types if no balance record exists
   let availableBalance = 0;
   if (balanceCheck.rows.length > 0) {
-    availableBalance = balanceCheck.rows[0].remaining_balance || 0;
+    availableBalance = parseFloat(balanceCheck.rows[0].remaining_balance || 0);
   } else {
     // No balance record exists, get default from leave_types
     const leaveTypeResult = await database.query(
@@ -204,34 +221,36 @@ export const CreateLeaveService = async (Request) => {
     if (leaveTypeResult.rows.length > 0) {
       const lt = leaveTypeResult.rows[0];
       // Use max_days from database (fully dynamic)
-      availableBalance = lt.max_days || 0;
+      availableBalance = parseFloat(lt.max_days || 0);
     }
   }
 
-  // Check if user has exhausted available balance
-  if (availableBalance < numDays) {
+  // Check if user has exhausted available balance (remaining balance = 0 or less than requested)
+  if (availableBalance <= 0 || availableBalance < numDays) {
     throw CreateError(
       `You have exhausted your available balance for ${leave_type}. Available: ${availableBalance} days, Requested: ${numDays} days.`,
       400
     );
   }
 
-  // Set initial statuses based on role (matching HR Portal)
-  // If HOD creates leave, HOD status is auto-approved
+  // Set initial statuses based on role
   // If Admin creates leave, both HOD and Admin status are auto-approved and status is 'Approved'
+  // If HOD creates leave, HOD status remains Pending (only Admin approval required)
   const isAdmin = (Role === 'admin' || Role === 'ADMIN');
   const isHod = (Role === 'hod' || Role === 'HOD');
-  // When admin applies leave, automatically approve HOD status as well
-  const hodStatus = (isAdmin || isHod) ? 'Approved' : 'Pending';
+  // HOD leaves: HOD status stays Pending, only Admin can approve
+  // Admin leaves: Both statuses auto-approved
+  // Employee leaves: Both statuses Pending (HOD → Admin flow)
+  const hodStatus = isAdmin ? 'Approved' : 'Pending'; // HOD leaves stay Pending
   const adminStatus = isAdmin ? 'Approved' : 'Pending';
-  const hodRemark = (isAdmin || isHod) ? 'Autoapproved' : null;
+  const hodRemark = isAdmin ? 'Autoapproved' : null; // No auto-approval for HOD leaves
   const adminRemark = isAdmin ? 'Autoapproved' : null;
   // Admin leaves are fully approved immediately
   const finalStatus = isAdmin ? 'Approved' : 'pending';
   
   // When admin applies leave, set approved_by_hod and approved_by_admin to admin's employee_id
-  // When HOD applies leave, set approved_by_hod to HOD's employee_id
-  const approvedByHod = (isAdmin || isHod) ? empId : null;
+  // When HOD applies leave, do NOT set approved_by_hod (stays null, status stays Pending)
+  const approvedByHod = isAdmin ? empId : null; // HOD leaves: approved_by_hod = null
   const approvedByAdmin = isAdmin ? empId : null;
 
   const result = await database.query(
@@ -266,9 +285,10 @@ export const CreateLeaveService = async (Request) => {
     }
     
     // First, ensure the balance record exists with correct total_balance
+    // Note: remaining_balance is a generated column - do NOT insert/update it directly
     await database.query(
-      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, remaining_balance, year)
-       VALUES ($1, $2, $5, 0, $5, $3)
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+       VALUES ($1, $2, $5, 0, $3)
        ON CONFLICT (employee_id, leave_type, year) 
        DO UPDATE SET 
          total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
@@ -276,11 +296,10 @@ export const CreateLeaveService = async (Request) => {
       [leave.employee_id, leave.leave_type, year, leave.number_of_days, defaultBalance]
     );
     
-    // Then update the used_balance and remaining_balance
+    // Then update the used_balance (remaining_balance will be auto-calculated by DB)
     await database.query(
       `UPDATE leave_balance 
        SET used_balance = used_balance + $4,
-           remaining_balance = GREATEST(0, total_balance - (used_balance + $4)),
            updated_at = NOW()
        WHERE employee_id = $1 
        AND leave_type = $2 
@@ -330,8 +349,9 @@ export const CreateLeaveService = async (Request) => {
         );
         const employeeUserId = empUserResult.rows[0]?.user_id;
 
-        // Notify assigned HOD (if exists) - ONLY if not admin applying (admin leaves don't need HOD approval)
-        if (employee.manager_id && !isAdmin) {
+        // Notify assigned HOD (if exists) - ONLY if employee applies (not admin, not HOD)
+        // HOD leaves skip HOD approval and go directly to Admin
+        if (employee.manager_id && !isAdmin && !isHod) {
           const hodUserResult = await database.query(
             'SELECT user_id FROM employees WHERE employee_id = $1',
             [employee.manager_id]
@@ -730,11 +750,15 @@ export const GetLeaveListService = async (Request) => {
     JOIN employees e ON la.employee_id = e.employee_id
     JOIN users u ON e.user_id = u.user_id
     LEFT JOIN leave_types lt ON la.leave_type = lt.name
-    WHERE la.employee_id = $1 AND EXTRACT(YEAR FROM la.start_date) = $2
+    WHERE la.employee_id = $1 
+    AND la.start_date >= $2::date 
+    AND la.start_date <= $3::date
   `;
   
-  const params = [empId, year];
-  let paramCount = 3;
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year}-12-31`;
+  const params = [empId, yearStart, yearEnd];
+  let paramCount = 4;
 
   // Add search filter
   if (searchKeyword && searchKeyword !== '0') {
@@ -872,6 +896,7 @@ export const GetAllLeavesService = async (Request) => {
       AdminStatus: row.admin_status || 'Pending',
       HodApproverName: row.hod_approver_name || null,
       AdminApproverName: row.admin_approver_name || null,
+      EmployeeRole: row.employee_role || null,
       NumOfDay: row.number_of_days,
       LeaveDetails: row.reason,
       createdAt: row.created_at
@@ -914,6 +939,7 @@ export const GetAllLeavesHodService = async (Request) => {
       u.email,
       u.first_name,
       u.last_name,
+      u.role as employee_role,
       COALESCE(
         NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
         hod_approver.first_name,
@@ -1002,6 +1028,7 @@ export const GetAllLeavesHodService = async (Request) => {
       }],
       HodStatus: row.hod_status || 'Pending',
       AdminStatus: row.admin_status || 'Pending',
+      EmployeeRole: row.employee_role || null,
       NumOfDay: row.number_of_days,
       LeaveDetails: row.reason,
       createdAt: row.created_at
@@ -1080,11 +1107,74 @@ export const UpdateLeaveService = async (Request) => {
     params.push(end_date);
     paramCount++;
   }
-  if (number_of_days) {
-    updates.push(`number_of_days = $${paramCount}`);
-    params.push(parseInt(number_of_days));
-    paramCount++;
+  
+  // If start_date or end_date is being updated, recalculate number_of_days
+  // Always recalculate to ensure working days are accurate (excluding weekends and holidays)
+  if (start_date || end_date) {
+    const finalStartDate = start_date || leave.start_date;
+    const finalEndDate = end_date || leave.end_date;
+    const empId = leave.employee_id;
+    
+    // Get employee location for accurate holiday calculation
+    const empResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [empId]
+    );
+    const employeeLocation = empResult.rows[0]?.location || null;
+    
+    // Recalculate working days
+    try {
+      const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
+      const recalculatedDays = await calculateLeaveDaysExcludingHolidays(finalStartDate, finalEndDate, employeeLocation, database);
+      
+      if (!recalculatedDays || recalculatedDays === 0) {
+        throw CreateError("Invalid date range: No working days found between start and end date. Please check if dates include only weekends/holidays.", 400);
+      }
+      
+      updates.push(`number_of_days = $${paramCount}`);
+      params.push(recalculatedDays);
+      paramCount++;
+      console.log(`✅ Recalculated ${recalculatedDays} working days for updated leave (excluding holidays and weekends)`);
+    } catch (calcError) {
+      if (calcError.status || calcError.statusCode) {
+        throw calcError;
+      }
+      console.error('❌ Failed to recalculate working days:', calcError);
+      throw CreateError(`Failed to recalculate working days: ${calcError.message}`, 400);
+    }
+  } else if (number_of_days) {
+    // If only number_of_days is provided without date changes, recalculate to ensure accuracy
+    const finalStartDate = leave.start_date;
+    const finalEndDate = leave.end_date;
+    const empId = leave.employee_id;
+    
+    // Get employee location
+    const empResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [empId]
+    );
+    const employeeLocation = empResult.rows[0]?.location || null;
+    
+    // Recalculate to ensure accuracy
+    try {
+      const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
+      const recalculatedDays = await calculateLeaveDaysExcludingHolidays(finalStartDate, finalEndDate, employeeLocation, database);
+      
+      if (recalculatedDays > 0) {
+        updates.push(`number_of_days = $${paramCount}`);
+        params.push(recalculatedDays);
+        paramCount++;
+        console.log(`✅ Recalculated ${recalculatedDays} working days (excluding holidays and weekends)`);
+      } else {
+        // If recalculation fails, don't update number_of_days
+        console.warn('⚠️ Could not recalculate days, keeping existing value');
+      }
+    } catch (calcError) {
+      // On error, don't update number_of_days
+      console.warn('⚠️ Could not recalculate days, keeping existing value:', calcError.message);
+    }
   }
+  
   if (reason !== undefined) {
     updates.push(`reason = $${paramCount}`);
     params.push(reason);
@@ -1142,26 +1232,6 @@ export const DeleteLeaveService = async (Request) => {
     }
   }
 
-  // If leave was approved and balance was deducted, restore the balance before deleting
-  if (isAdmin && (leave.hod_status === 'Approved' || leave.admin_status === 'Approved')) {
-    try {
-      const year = new Date(leave.start_date).getFullYear();
-      // Restore leave balance by subtracting the used days
-      await database.query(
-        `UPDATE leave_balance 
-         SET used_balance = GREATEST(0, used_balance - $1),
-             updated_at = NOW()
-         WHERE employee_id = $2 
-         AND leave_type = $3 
-         AND year = $4`,
-        [leave.number_of_days, leave.employee_id, leave.leave_type, year]
-      );
-    } catch (balanceError) {
-      // Log error but don't fail deletion
-      console.error('Failed to restore leave balance:', balanceError);
-    }
-  }
-
   // Get leave details before deletion for SSE notification
   const leaveBeforeDelete = await database.query(
     `SELECT la.*, e.user_id as employee_user_id
@@ -1171,10 +1241,32 @@ export const DeleteLeaveService = async (Request) => {
     [id]
   );
 
+  // Store leave info for balance recalculation after deletion
+  const hadApproval = leave.hod_status === 'Approved' || leave.admin_status === 'Approved';
+  const leaveInfo = {
+    employee_id: leave.employee_id,
+    leave_type: leave.leave_type,
+    start_date: leave.start_date
+  };
+
   const result = await database.query(
     'DELETE FROM leave_applications WHERE id = $1 RETURNING *',
     [id]
   );
+
+  // Recalculate leave balance after deletion if leave had any approval
+  // This ensures balance is accurate after deletion (leave is already deleted, so won't be counted)
+  if (isAdmin && hadApproval) {
+    try {
+      const year = new Date(leaveInfo.start_date).getFullYear();
+      // Recalculate balance to reflect the deletion (deleted leave won't be in the sum)
+      await recalculateLeaveBalance(leaveInfo.employee_id, leaveInfo.leave_type, year);
+      console.log(`✅ Leave balance recalculated after deletion: ${leaveInfo.leave_type}`);
+    } catch (balanceError) {
+      // Log error but don't fail deletion
+      console.error('Failed to recalculate leave balance after deletion:', balanceError);
+    }
+  }
 
   // Send real-time SSE event for leave deletion
   try {
@@ -1351,69 +1443,29 @@ export const ApproveLeaveHodService = async (Request) => {
     [finalStatus, id]
   );
 
-  // Update leave balance when EITHER HOD OR Admin approves (first approval)
-  // Check if this is the first approval (balance not yet deducted)
-  const wasHodApproved = leave.hod_status === 'Approved';
-  const wasAdminApproved = leave.admin_status === 'Approved';
-  const wasAlreadyDeducted = wasHodApproved || wasAdminApproved;
-  
-  // Update balance if this is the first approval (HOD approves and balance not yet deducted)
-  if (hodStatus === 'Approved' && !wasAlreadyDeducted) {
-    const year = new Date(leave.start_date).getFullYear();
-    
-    // Get default total_balance from leave_types if balance doesn't exist
-    const leaveTypeResult = await database.query(
-      `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
-      [leave.leave_type]
-    );
-    
-    let defaultBalance = 0;
-    if (leaveTypeResult.rows.length > 0) {
-      const lt = leaveTypeResult.rows[0];
-      // Use max_days from database (fully dynamic)
-      defaultBalance = lt.max_days || 0;
-    }
-    
-    // First, ensure the balance record exists with correct total_balance
-    await database.query(
-      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, remaining_balance, year)
-       VALUES ($1, $2, $5, 0, $5, $3)
-       ON CONFLICT (employee_id, leave_type, year) 
-       DO UPDATE SET 
-         total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
-         updated_at = NOW()`,
-      [leave.employee_id, leave.leave_type, year, leave.number_of_days, defaultBalance]
-    );
-    
-    // Then update the used_balance and remaining_balance
-    await database.query(
-      `UPDATE leave_balance 
-       SET used_balance = used_balance + $4,
-           remaining_balance = GREATEST(0, total_balance - (used_balance + $4)),
-           updated_at = NOW()
-       WHERE employee_id = $1 
-       AND leave_type = $2 
-       AND year = $3`,
-      [leave.employee_id, leave.leave_type, year, leave.number_of_days]
-    );
-    
-    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - First approval by HOD`);
-  }
+  // Recalculate leave balance based on current approval status
+  // Balance is updated if ANY approver approves, and reverted if all reject
+  // This ensures balance reflects the current state of all leaves
+  const year = new Date(leave.start_date).getFullYear();
+  await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
 
   // Get approver name
-  const approverResult = await database.query(
-    `SELECT COALESCE(
-      NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
-      u.first_name,
-      u.last_name,
-      u.email
-    ) as approver_name
-     FROM employees e
-     JOIN users u ON e.user_id = u.user_id
-     WHERE e.employee_id = $1`,
-    [empId]
-  );
-  const approverName = approverResult.rows[0]?.approver_name || 'HOD';
+  let approverName = 'HOD';
+  if (empId) {
+    const approverResult = await database.query(
+      `SELECT COALESCE(
+        NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+        u.first_name,
+        u.last_name,
+        u.email
+      ) as approver_name
+       FROM employees e
+       JOIN users u ON e.user_id = u.user_id
+       WHERE e.employee_id = $1`,
+      [empId]
+    );
+    approverName = approverResult.rows[0]?.approver_name || 'HOD';
+  }
 
   // Send email notification to employee (non-blocking)
   // Only send email if final status changed to Approved or Rejected (not if still Pending)
@@ -1685,69 +1737,29 @@ export const ApproveLeaveAdminService = async (Request) => {
     [finalStatus, id]
   );
 
-  // Update leave balance when EITHER HOD OR Admin approves (first approval)
-  // Check if this is the first approval (balance not yet deducted)
-  const wasHodApproved = leave.hod_status === 'Approved';
-  const wasAdminApproved = leave.admin_status === 'Approved';
-  const wasAlreadyDeducted = wasHodApproved || wasAdminApproved;
-  
-  // Update balance if this is the first approval (Admin approves and balance not yet deducted)
-  if (adminStatus === 'Approved' && !wasAlreadyDeducted) {
-    const year = new Date(leave.start_date).getFullYear();
-    
-    // Get default total_balance from leave_types if balance doesn't exist
-    const leaveTypeResult = await database.query(
-      `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
-      [leave.leave_type]
-    );
-    
-    let defaultBalance = 0;
-    if (leaveTypeResult.rows.length > 0) {
-      const lt = leaveTypeResult.rows[0];
-      // Use max_days from database (fully dynamic)
-      defaultBalance = lt.max_days || 0;
-    }
-    
-    // First, ensure the balance record exists with correct total_balance
-    await database.query(
-      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, remaining_balance, year)
-       VALUES ($1, $2, $5, 0, $5, $3)
-       ON CONFLICT (employee_id, leave_type, year) 
-       DO UPDATE SET 
-         total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
-         updated_at = NOW()`,
-      [leave.employee_id, leave.leave_type, year, leave.number_of_days, defaultBalance]
-    );
-    
-    // Then update the used_balance and remaining_balance
-    await database.query(
-      `UPDATE leave_balance 
-       SET used_balance = used_balance + $4,
-           remaining_balance = GREATEST(0, total_balance - (used_balance + $4)),
-           updated_at = NOW()
-       WHERE employee_id = $1 
-       AND leave_type = $2 
-       AND year = $3`,
-      [leave.employee_id, leave.leave_type, year, leave.number_of_days]
-    );
-    
-    console.log(`✅ Leave balance updated for ${leave.leave_type} (${leave.number_of_days} days) - First approval by Admin`);
-  }
+  // Recalculate leave balance based on current approval status
+  // Balance is updated if ANY approver approves, and reverted if all reject
+  // This ensures balance reflects the current state of all leaves
+  const year = new Date(leave.start_date).getFullYear();
+  await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
 
   // Get approver name
-  const approverResult = await database.query(
-    `SELECT COALESCE(
-      NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
-      u.first_name,
-      u.last_name,
-      u.email
-    ) as approver_name
-     FROM employees e
-     JOIN users u ON e.user_id = u.user_id
-     WHERE e.employee_id = $1`,
-    [empId]
-  );
-  const approverName = approverResult.rows[0]?.approver_name || 'Admin';
+  let approverName = 'Admin';
+  if (empId) {
+    const approverResult = await database.query(
+      `SELECT COALESCE(
+        NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+        u.first_name,
+        u.last_name,
+        u.email
+      ) as approver_name
+       FROM employees e
+       JOIN users u ON e.user_id = u.user_id
+       WHERE e.employee_id = $1`,
+      [empId]
+    );
+    approverName = approverResult.rows[0]?.approver_name || 'Admin';
+  }
 
   // Send email notification to employee (non-blocking)
   // Only send email if final status changed to Approved or Rejected (not if still Pending)
@@ -1943,6 +1955,7 @@ export const FilterLeaveByStatusAdminService = async (Request) => {
       u.email,
       u.first_name,
       u.last_name,
+      u.role as employee_role,
       COALESCE(
         NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
         hod_approver.first_name,
@@ -2136,6 +2149,58 @@ export const FilterLeaveByStatusHodService = async (Request) => {
  * Check for Overlapping Leave Dates
  * Returns overlapping leaves for the given date range
  */
+/**
+ * Calculate Working Days Service
+ * Returns the number of working days between start_date and end_date
+ * Excludes weekends and organization holidays based on employee location
+ */
+export const CalculateWorkingDaysService = async (Request) => {
+  const { start_date, end_date } = Request.body || Request.query;
+  const UserId = Request.UserId;
+  const EmployeeId = Request.EmployeeId;
+
+  if (!start_date || !end_date) {
+    throw CreateError("start_date and end_date are required", 400);
+  }
+
+  // Get employee_id and location
+  let empId = EmployeeId;
+  let employeeLocation = null;
+  if (!empId) {
+    const empResult = await database.query(
+      'SELECT employee_id, location FROM employees WHERE user_id = $1 LIMIT 1',
+      [UserId]
+    );
+    if (empResult.rows.length > 0) {
+      empId = empResult.rows[0].employee_id;
+      employeeLocation = empResult.rows[0].location;
+    }
+  } else {
+    const empResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [empId]
+    );
+    if (empResult.rows.length > 0) {
+      employeeLocation = empResult.rows[0].location;
+    }
+  }
+
+  // Calculate working days excluding weekends and holidays
+  const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
+  const workingDays = await calculateLeaveDaysExcludingHolidays(start_date, end_date, employeeLocation, database);
+
+  if (!workingDays || workingDays === 0) {
+    throw CreateError("No working days found between the selected dates. Please check if dates include only weekends/holidays.", 400);
+  }
+
+  return {
+    working_days: workingDays,
+    start_date: start_date,
+    end_date: end_date,
+    employee_location: employeeLocation
+  };
+};
+
 export const CheckOverlappingLeavesService = async (Request) => {
   const UserId = Request.UserId;
   const { start_date, end_date, leave_id } = Request.body || Request.query;
@@ -2189,7 +2254,8 @@ export const CheckOverlappingLeavesService = async (Request) => {
 
 /**
  * Get Leave Balance
- * Returns leave balance for the specified year, with default balances for years with no data
+ * Returns leave balance for the specified year, recalculated from approved leaves
+ * Filters leave types by employee location (IN / US)
  */
 export const GetLeaveBalanceService = async (Request) => {
   const UserId = Request.UserId;
@@ -2208,45 +2274,169 @@ export const GetLeaveBalanceService = async (Request) => {
     empId = empResult.rows[0].employee_id;
   }
 
+  // Get employee location for filtering leave types
+  const empLocationResult = await database.query(
+    `SELECT e.location 
+     FROM employees e
+     WHERE e.employee_id = $1`,
+    [empId]
+  );
+  const employeeLocation = empLocationResult.rows[0]?.location || null;
+
   // Get year from query params or use current year
   const year = parseInt(Request.query?.year) || new Date().getFullYear();
 
-  // Get existing balances for the year
+  // Get all active leave types, filtered by employee location
+  let leaveTypesQuery = `
+    SELECT name, code, max_days, location 
+    FROM leave_types 
+    WHERE is_active = true
+  `;
+  const leaveTypesParams = [];
+  
+  // Filter by location: show leave types that match employee location or are "All"
+  if (employeeLocation) {
+    // Map location to country codes for matching
+    const mapLocationToCountryCode = (location) => {
+      if (!location) return [];
+      const loc = location.toString().trim();
+      if (loc === 'India' || loc === 'IN') return ['IN', 'India'];
+      if (loc === 'US' || loc === 'United States') return ['US', 'United States'];
+      return [loc];
+    };
+    
+    const countryCodes = mapLocationToCountryCode(employeeLocation);
+    const conditions = [];
+    countryCodes.forEach((code, index) => {
+      conditions.push(`location = $${index + 1}`);
+      leaveTypesParams.push(code);
+    });
+    conditions.push(`location = 'All'`);
+    conditions.push(`location IS NULL`);
+    leaveTypesQuery += ` AND (${conditions.join(' OR ')})`;
+  }
+  
+  leaveTypesQuery += ` ORDER BY name`;
+  const leaveTypesResult = await database.query(leaveTypesQuery, leaveTypesParams);
+
+  // OPTIMIZED: Calculate all leave balances in a single query instead of looping
+  // Get all approved leaves for this employee and year in one query (grouped by leave_type)
+  // Use date range instead of EXTRACT for better index usage
+  const yearStart = `${year}-01-01`;
+  const yearEnd = `${year}-12-31`;
+  const approvedLeavesByType = await database.query(
+    `SELECT 
+       leave_type,
+       COALESCE(SUM(number_of_days), 0) as used_days
+     FROM leave_applications
+     WHERE employee_id = $1
+     AND start_date >= $2::date
+     AND start_date <= $3::date
+     AND (
+       (UPPER(TRIM(COALESCE(hod_status, 'Pending'))) = 'APPROVED' OR UPPER(TRIM(COALESCE(admin_status, 'Pending'))) = 'APPROVED')
+       AND UPPER(TRIM(COALESCE(hod_status, 'Pending'))) != 'REJECTED'
+       AND UPPER(TRIM(COALESCE(admin_status, 'Pending'))) != 'REJECTED'
+     )
+     GROUP BY leave_type`,
+    [empId, yearStart, yearEnd]
+  );
+  
+  // Create a map of used days by leave type
+  const usedDaysMap = new Map();
+  approvedLeavesByType.rows.forEach(row => {
+    usedDaysMap.set(row.leave_type, parseFloat(row.used_days || 0));
+  });
+  
+  // Get existing balances in one query
   const existingBalances = await database.query(
-    `SELECT leave_type, total_balance, used_balance, remaining_balance, year
+    `SELECT leave_type, total_balance, used_balance, remaining_balance
      FROM leave_balance
-     WHERE employee_id = $1 AND year = $2
-     ORDER BY leave_type`,
+     WHERE employee_id = $1 AND year = $2`,
     [empId, year]
   );
-
-  // Get all active leave types
-  const leaveTypesResult = await database.query(
-    `SELECT name, code, max_days FROM leave_types WHERE is_active = true ORDER BY name`
-  );
-
-  // Create a map of existing balances by leave_type
   const balanceMap = new Map();
   existingBalances.rows.forEach(balance => {
     balanceMap.set(balance.leave_type, balance);
   });
-
-  // Build result array with defaults for missing leave types
-  const result = leaveTypesResult.rows.map(lt => {
-    if (balanceMap.has(lt.name)) {
-      // Return existing balance
-      return balanceMap.get(lt.name);
-    } else {
-      // Return default balance for this leave type (use max_days from database - fully dynamic)
-      const defaultBalance = lt.max_days || 0;
-
-      return {
-        leave_type: lt.name,
-        total_balance: defaultBalance,
-        used_balance: 0,
-        remaining_balance: defaultBalance,
-        year: year
-      };
+  
+  // Build result array and update balances in batch
+  const result = [];
+  const balanceUpdates = [];
+  
+  for (const lt of leaveTypesResult.rows) {
+    const usedDays = usedDaysMap.get(lt.name) || 0;
+    const defaultBalance = lt.max_days || 0;
+    const existingBalance = balanceMap.get(lt.name);
+    
+    // Calculate new balance values
+    const totalBalance = existingBalance?.total_balance || defaultBalance;
+    const newUsedBalance = usedDays;
+    const newRemainingBalance = Math.max(0, totalBalance - newUsedBalance);
+    
+    // Prepare for batch update
+    // Note: remaining_balance is a generated column - do NOT include it in updates
+    balanceUpdates.push({
+      leave_type: lt.name,
+      total_balance: totalBalance,
+      used_balance: newUsedBalance
+    });
+    
+    // For result, calculate remaining_balance for display (DB will calculate it in actual table)
+    const calculatedRemaining = Math.max(0, totalBalance - newUsedBalance);
+    result.push({
+      leave_type: lt.name,
+      total_balance: totalBalance,
+      used_balance: newUsedBalance,
+      remaining_balance: calculatedRemaining,
+      year: year
+    });
+  }
+  
+  // Batch update all balances efficiently
+  // Note: remaining_balance is a generated column - do NOT insert/update it directly
+  if (balanceUpdates.length > 0) {
+    // Update balances individually but in parallel (faster than sequential)
+    // Using Promise.all for parallel execution
+    const updatePromises = balanceUpdates.map(b => 
+      database.query(
+        `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (employee_id, leave_type, year)
+         DO UPDATE SET
+           total_balance = COALESCE(EXCLUDED.total_balance, leave_balance.total_balance),
+           used_balance = EXCLUDED.used_balance,
+           updated_at = NOW()`,
+        [empId, b.leave_type, b.total_balance, b.used_balance, year]
+      ).catch(err => {
+        console.error(`Failed to update balance for ${b.leave_type}:`, err);
+        return null; // Continue with other updates
+      })
+    );
+    
+    await Promise.all(updatePromises);
+  }
+  
+  // Re-fetch balances to get the DB-calculated remaining_balance values
+  const finalBalances = await database.query(
+    `SELECT leave_type, total_balance, used_balance, remaining_balance
+     FROM leave_balance
+     WHERE employee_id = $1 AND year = $2`,
+    [empId, year]
+  );
+  
+  // Update result with actual DB-calculated remaining_balance
+  const finalBalanceMap = new Map();
+  finalBalances.rows.forEach(b => {
+    finalBalanceMap.set(b.leave_type, b);
+  });
+  
+  // Update result array with actual remaining_balance from DB
+  result.forEach(r => {
+    const dbBalance = finalBalanceMap.get(r.leave_type);
+    if (dbBalance) {
+      r.remaining_balance = parseFloat(dbBalance.remaining_balance || 0);
+      r.used_balance = parseFloat(dbBalance.used_balance || 0);
+      r.total_balance = parseFloat(dbBalance.total_balance || r.total_balance);
     }
   });
 
@@ -2353,137 +2543,162 @@ export const BulkApproveLeaveAdminService = async (Request) => {
 
 /**
  * Get Leave Reports (with filters)
- * Used for Reports page - filters by employee, status, date range, leave type
+ * Admin: sees all employees
+ * HOD: sees only permitted employees (based on manager_id, department, or location)
  */
 export const GetLeaveReportsService = async (Request) => {
-  const { employee_id, status, from_date, to_date, leave_type } = Request.query;
+  const UserId = Request.UserId;
+  const EmployeeId = Request.EmployeeId;
+  const Role = Request.Role || '';
+  const isAdmin = Role?.toLowerCase() === 'admin';
   
-  try {
-    let query = `
-      SELECT 
-        la.id,
-        la.leave_type,
-        lt.code as leave_type_code,
-        TO_CHAR(la.created_at, 'YYYY-MM-DD') as applied_date,
-        TO_CHAR(la.start_date, 'YYYY-MM-DD') as start_date,
-        TO_CHAR(la.end_date, 'YYYY-MM-DD') as end_date,
-        la.number_of_days,
-        CASE 
-          WHEN la.hod_status = 'Rejected' OR la.admin_status = 'Rejected' THEN 'Rejected'
-          WHEN la.hod_status = 'Approved' AND la.admin_status = 'Approved' THEN 'Approved'
-          WHEN la.hod_status = 'Approved' OR la.admin_status = 'Approved' THEN 'Approved'
-          ELSE 'Pending'
-        END as status,
-        la.hod_status,
-        la.admin_status,
-        la.reason,
-        COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as employee_name,
-        u.email as employee_email,
-        COALESCE(
-          NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
-          hod_approver.first_name,
-          hod_approver.last_name,
-          hod_approver.email,
-          NULL
-        ) as hod_approver_name,
-        COALESCE(
-          NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
-          admin_approver.first_name,
-          admin_approver.last_name,
-          admin_approver.email,
-          NULL
-        ) as admin_approver_name,
-        CASE 
-          WHEN la.hod_status = 'Approved' AND la.admin_status = 'Approved' THEN 
-            COALESCE(
-              NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
-              admin_approver.first_name,
-              admin_approver.last_name,
-              admin_approver.email,
-              NULL
-            )
-          WHEN la.hod_status = 'Approved' THEN 
-            COALESCE(
-              NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
-              hod_approver.first_name,
-              hod_approver.last_name,
-              hod_approver.email,
-              NULL
-            )
-          WHEN la.admin_status = 'Approved' THEN 
-            COALESCE(
-              NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
-              admin_approver.first_name,
-              admin_approver.last_name,
-              admin_approver.email,
-              NULL
-            )
-          ELSE NULL
-        END as approved_by,
-        COALESCE(e.team, e.location, 'N/A') as team
-      FROM leave_applications la
-      JOIN employees e ON la.employee_id = e.employee_id
-      JOIN users u ON e.user_id = u.user_id
-      LEFT JOIN leave_types lt ON la.leave_type = lt.name
-      LEFT JOIN employees hod_emp ON la.approved_by_hod = hod_emp.employee_id
-      LEFT JOIN users hod_approver ON hod_emp.user_id = hod_approver.user_id
-      LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
-      LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
-      WHERE 1=1
-    `;
-    
-    const params = [];
-    let paramCount = 1;
-    
-    // Filter by employee_id (user_id)
-    if (employee_id && employee_id !== 'all' && employee_id !== '') {
-      query += ` AND u.user_id = $${paramCount}`;
-      params.push(employee_id);
-      paramCount++;
-    }
-    
-    // Filter by status (use calculated status from hod_status and admin_status)
-    if (status && status !== 'all' && status !== '') {
-      if (status === 'Approved') {
-        query += ` AND (la.hod_status = 'Approved' OR la.admin_status = 'Approved') AND la.hod_status != 'Rejected' AND la.admin_status != 'Rejected'`;
-      } else if (status === 'Rejected') {
-        query += ` AND (la.hod_status = 'Rejected' OR la.admin_status = 'Rejected')`;
-      } else if (status === 'Pending') {
-        query += ` AND (la.hod_status = 'Pending' OR la.hod_status IS NULL) AND (la.admin_status = 'Pending' OR la.admin_status IS NULL) AND la.hod_status != 'Rejected' AND la.admin_status != 'Rejected'`;
-      }
-    }
-    
-    // Filter by date range
-    if (from_date) {
-      query += ` AND la.start_date >= $${paramCount}`;
-      params.push(from_date);
-      paramCount++;
-    }
-    if (to_date) {
-      query += ` AND la.end_date <= $${paramCount}`;
-      params.push(to_date);
-      paramCount++;
-    }
-    
-    // Filter by leave type
-    if (leave_type && leave_type !== 'all' && leave_type !== '') {
-      query += ` AND la.leave_type = $${paramCount}`;
-      params.push(leave_type);
-      paramCount++;
-    }
-    
-    query += ` ORDER BY la.start_date DESC`;
-    
-    const result = await database.query(query, params);
-    
-    return {
-      data: result.rows,
-      count: result.rows.length
-    };
-  } catch (error) {
-    console.error('GetLeaveReportsService error:', error);
-    throw CreateError(error.message || "Failed to fetch leave reports", 500);
+  // Get filters from query params or body
+  const employeeId = Request.query?.employeeId || Request.body?.employeeId || null;
+  const status = Request.query?.status || Request.body?.status || null;
+  const startDate = Request.query?.startDate || Request.body?.startDate || null;
+  const endDate = Request.query?.endDate || Request.body?.endDate || null;
+  const leaveType = Request.query?.leaveType || Request.body?.leaveType || null;
+
+  let query = `
+    SELECT 
+      la.*,
+      lt.name as leave_type_name,
+      COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
+      u.email,
+      u.first_name,
+      u.last_name,
+      u.user_id,
+      COALESCE(
+        NULLIF(TRIM(hod_approver.first_name || ' ' || hod_approver.last_name), ''),
+        hod_approver.first_name,
+        hod_approver.last_name,
+        hod_approver.email
+      ) as hod_approver_name,
+      COALESCE(
+        NULLIF(TRIM(admin_approver.first_name || ' ' || admin_approver.last_name), ''),
+        admin_approver.first_name,
+        admin_approver.last_name,
+        admin_approver.email
+      ) as admin_approver_name
+    FROM leave_applications la
+    JOIN employees e ON la.employee_id = e.employee_id
+    JOIN users u ON e.user_id = u.user_id
+    LEFT JOIN leave_types lt ON la.leave_type = lt.name
+    LEFT JOIN employees hod_emp ON la.approved_by_hod = hod_emp.employee_id
+    LEFT JOIN users hod_approver ON hod_emp.user_id = hod_approver.user_id
+    LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
+    LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
+    WHERE 1=1
+  `;
+  
+  const params = [];
+  let paramCount = 1;
+
+  // HOD scope: Only show permitted employees
+  if (!isAdmin && EmployeeId) {
+    query += ` AND (
+      -- Priority 1: Direct manager assignment
+      e.manager_id = $${paramCount}
+      OR
+      -- Priority 2: Department-based (only if no manager_id assigned)
+      (e.manager_id IS NULL AND EXISTS (
+        SELECT 1 FROM users hod_u
+        JOIN employees hod_e ON hod_e.user_id = hod_u.user_id
+        WHERE hod_e.employee_id = $${paramCount}
+        AND hod_u.department = u.department
+        AND LOWER(TRIM(hod_u.role)) = 'hod'
+      ))
+      OR
+      -- Priority 3: Location-based (only if no manager_id assigned)
+      (e.manager_id IS NULL AND EXISTS (
+        SELECT 1 FROM employees hod_e
+        JOIN employees emp_e ON emp_e.location = hod_e.location
+        WHERE hod_e.employee_id = $${paramCount}
+        AND emp_e.employee_id = e.employee_id
+        AND EXISTS (
+          SELECT 1 FROM users hod_u
+          WHERE hod_u.user_id = hod_e.user_id
+          AND LOWER(TRIM(hod_u.role)) = 'hod'
+        )
+      ))
+    )`;
+    params.push(EmployeeId);
+    paramCount++;
   }
+
+  // Employee filter
+  if (employeeId && employeeId !== 'all' && employeeId !== 'All Users' && employeeId !== '') {
+    query += ` AND u.user_id = $${paramCount}`;
+    params.push(parseInt(employeeId));
+    paramCount++;
+  }
+
+  // Status filter
+  if (status && status !== 'All' && status !== 'all') {
+    if (status === 'Approved') {
+      query += ` AND la.status = $${paramCount}`;
+      params.push('Approved');
+      paramCount++;
+    } else if (status === 'Rejected') {
+      query += ` AND la.status = $${paramCount}`;
+      params.push('Rejected');
+      paramCount++;
+    } else if (status === 'Pending') {
+      query += ` AND la.status = $${paramCount}`;
+      params.push('Pending');
+      paramCount++;
+    }
+  }
+
+  // Date range filter
+  if (startDate) {
+    query += ` AND la.start_date >= $${paramCount}`;
+    params.push(startDate);
+    paramCount++;
+  }
+  if (endDate) {
+    query += ` AND la.end_date <= $${paramCount}`;
+    params.push(endDate);
+    paramCount++;
+  }
+
+  // Leave type filter
+  if (leaveType && leaveType !== 'all' && leaveType !== 'All') {
+    query += ` AND la.leave_type = $${paramCount}`;
+    params.push(leaveType);
+    paramCount++;
+  }
+
+  // Get total count
+  const countQuery = query.replace(/SELECT[\s\S]*?FROM/, 'SELECT COUNT(*) as total FROM').replace(/ORDER BY[\s\S]*$/, '');
+  const countResult = await database.query(countQuery, params);
+  const total = parseInt(countResult.rows[0]?.total || 0);
+
+  // Add ordering
+  query += ` ORDER BY la.created_at DESC`;
+
+  const result = await database.query(query, params);
+
+  return {
+    Total: [{ count: total }],
+    Data: result.rows.map(row => ({
+      ...row,
+      LeaveType: row.leave_type_name || row.leave_type,
+      Employee: [{
+        FirstName: row.first_name,
+        LastName: row.last_name,
+        Email: row.email,
+        Image: null
+      }],
+      HodStatus: row.hod_status || 'Pending',
+      AdminStatus: row.admin_status || 'Pending',
+      HodApproverName: row.hod_approver_name || null,
+      AdminApproverName: row.admin_approver_name || null,
+      NumOfDay: row.number_of_days,
+      LeaveDetails: row.reason,
+      createdAt: row.created_at
+    }))
+  };
 };
 
 // Note: All services are exported inline using 'export const'

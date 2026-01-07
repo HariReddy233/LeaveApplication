@@ -18,15 +18,17 @@ export const GetAllEmployeesService = async (Request) => {
                  -- Note: If users table has full_name column (old schema), it won't be accessed here
                  -- to avoid errors. Names should be in first_name/last_name (new schema).
                  COALESCE(
-                   NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
                    NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+                   NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
                    u.email
                  ) as full_name,
-                 u.email, 
+                 u.email,
+                 u.phone_number,
                  e.location, 
                  u.department as team,
                  u.department,
-                 e.manager_id, 
+                 e.manager_id,
+                 e.admin_id,
                  COALESCE(u.role, 'employee') as role,
                  u.designation,
                  (
@@ -47,17 +49,27 @@ export const GetAllEmployeesService = async (Request) => {
                    WHERE hod_e.employee_id = e.manager_id
                      AND LOWER(TRIM(COALESCE(hod_u.role, ''))) = 'hod'
                    LIMIT 1
-                 ) as hod_name
+                 ) as hod_name,
+                 admin_u.email as admin_email,
+                 COALESCE(
+                   NULLIF(TRIM(admin_u.first_name || ' ' || COALESCE(admin_u.last_name, '')), ''),
+                   admin_u.email
+                 ) as admin_name
                FROM users u
                LEFT JOIN employees e ON e.user_id = u.user_id
+               LEFT JOIN employees admin_e ON admin_e.employee_id = e.admin_id
+               LEFT JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
+                 AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
                WHERE u.role IS NOT NULL 
                AND (u.status = 'Active' OR u.status IS NULL OR u.status = '')`;
     const params = [];
     let paramCount = 1;
 
-    if (location) {
-      // Location filtering not available without employees table
-      // Skip for now
+    if (location && location !== 'All' && location !== '') {
+      // Filter by location from employees table
+      query += ` AND e.location = $${paramCount}`;
+      params.push(location);
+      paramCount++;
     }
 
     if (team) {
@@ -101,6 +113,37 @@ export const GetAllEmployeesService = async (Request) => {
       console.log('⚠️ No employees found with manager_id assigned');
     }
     
+    // Debug: Log employees with admin_id to verify admin assignment
+    const employeesWithAdmin = result.rows.filter(r => r.admin_id);
+    console.log(`📊 Employees with admin_id: ${employeesWithAdmin.length}`);
+    if (employeesWithAdmin.length > 0) {
+      console.log('📊 Employees with admin_id assigned:', employeesWithAdmin.map(e => ({
+        name: e.full_name,
+        email: e.email,
+        role: e.role,
+        admin_id: e.admin_id,
+        admin_name: e.admin_name,
+        admin_email: e.admin_email,
+        hasAdminInfo: !!(e.admin_name || e.admin_email)
+      })));
+    } else {
+      console.log('⚠️ No employees found with admin_id assigned');
+    }
+    
+    // Debug: Log HODs specifically to check admin assignment
+    const hods = result.rows.filter(r => r.role && r.role.toLowerCase() === 'hod');
+    console.log(`📊 Total HODs found: ${hods.length}`);
+    if (hods.length > 0) {
+      console.log('📊 HOD admin assignments:', hods.map(h => ({
+        name: h.full_name,
+        email: h.email,
+        admin_id: h.admin_id,
+        admin_name: h.admin_name,
+        admin_email: h.admin_email,
+        hasAdmin: !!(h.admin_id && (h.admin_name || h.admin_email))
+      })));
+    }
+    
     // Also log employees without HOD info but with manager_id (potential issue)
     const employeesWithManagerButNoHod = result.rows.filter(r => r.manager_id && !r.hod_name && !r.hod_email);
     if (employeesWithManagerButNoHod.length > 0) {
@@ -142,7 +185,54 @@ export const GetAllEmployeesService = async (Request) => {
       }
     }
     
-    return result.rows;
+    // Test: Verify admin_id is being returned correctly
+    console.log('\n🔍 TEST: Checking admin_id in response...');
+    const testHods = result.rows.filter(r => r.role && (r.role.toLowerCase() === 'hod' || r.role.toLowerCase() === 'h.o.d'));
+    if (testHods.length > 0) {
+      console.log(`✅ Found ${testHods.length} HOD(s) in response`);
+      testHods.forEach((hod, index) => {
+        console.log(`\n📋 HOD #${index + 1}:`, {
+          name: hod.full_name,
+          email: hod.email,
+          user_id: hod.user_id,
+          role: hod.role,
+          admin_id: hod.admin_id,
+          admin_id_type: typeof hod.admin_id,
+          admin_name: hod.admin_name,
+          admin_email: hod.admin_email,
+          hasAdminId: !!hod.admin_id,
+          hasAdminName: !!hod.admin_name,
+          hasAdminEmail: !!hod.admin_email
+        });
+      });
+    } else {
+      console.log('⚠️ No HODs found in response to test admin assignment');
+    }
+    console.log('🔍 TEST: End of admin_id check\n');
+    
+    // CRITICAL: Ensure admin_id, admin_name, and admin_email are always in response
+    // Map the results to guarantee these fields exist (even if NULL)
+    const mappedResults = result.rows.map(row => ({
+      ...row,
+      admin_id: row.admin_id ?? null,
+      admin_name: row.admin_name ?? null,
+      admin_email: row.admin_email ?? null,
+    }));
+    
+    console.log(`\n✅ Mapped ${mappedResults.length} results with guaranteed admin fields`);
+    // Log sample to verify
+    const sampleHod = mappedResults.find(r => r.role && r.role.toLowerCase() === 'hod');
+    if (sampleHod) {
+      console.log(`📋 Sample HOD in response:`, {
+        name: sampleHod.full_name,
+        email: sampleHod.email,
+        admin_id: sampleHod.admin_id,
+        admin_name: sampleHod.admin_name,
+        admin_email: sampleHod.admin_email
+      });
+    }
+    
+    return mappedResults;
   } catch (error) {
     // Fallback: try simpler query with just users table (no join)
     try {
@@ -152,17 +242,19 @@ export const GetAllEmployeesService = async (Request) => {
           u.user_id::text as id,
           u.user_id::text as employee_id,
           COALESCE(
-            NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
             NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+            NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
             u.email
           ) as full_name,
           u.email,
+          u.phone_number,
           COALESCE(u.role, 'employee') as role,
           u.department as team,
           u.department,
           u.designation,
           e.location,
           e.manager_id,
+          e.admin_id,
           (
             SELECT hod_u.email 
             FROM employees hod_e 
@@ -181,9 +273,17 @@ export const GetAllEmployeesService = async (Request) => {
             WHERE hod_e.employee_id = e.manager_id
               AND LOWER(TRIM(COALESCE(hod_u.role, ''))) = 'hod'
             LIMIT 1
-          ) as hod_name
+          ) as hod_name,
+          admin_u.email as admin_email,
+          COALESCE(
+            NULLIF(TRIM(admin_u.first_name || ' ' || COALESCE(admin_u.last_name, '')), ''),
+            admin_u.email
+          ) as admin_name
          FROM users u
          LEFT JOIN employees e ON e.user_id = u.user_id
+         LEFT JOIN employees admin_e ON admin_e.employee_id = e.admin_id
+         LEFT JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
+           AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
          WHERE u.role IS NOT NULL 
          AND (u.status = 'Active' OR u.status IS NULL OR u.status = '')
          ORDER BY COALESCE(
@@ -194,7 +294,16 @@ export const GetAllEmployeesService = async (Request) => {
          LIMIT 1000`
       );
       console.log(`Fallback query returned ${result.rows.length} rows`);
-      return result.rows;
+      
+      // CRITICAL: Ensure admin_id, admin_name, and admin_email are always in response
+      const mappedFallbackResults = result.rows.map(row => ({
+        ...row,
+        admin_id: row.admin_id ?? null,
+        admin_name: row.admin_name ?? null,
+        admin_email: row.admin_email ?? null,
+      }));
+      
+      return mappedFallbackResults;
     } catch (fallbackError) {
       console.error('GetAllEmployeesService fallback error:', fallbackError);
       throw CreateError("Failed to fetch employees", 500);
@@ -209,9 +318,38 @@ export const GetUserProfileService = async (Request) => {
   const UserId = Request.UserId;
 
   const result = await database.query(
-    `SELECT e.employee_id, 
-     COALESCE(u.first_name || ' ' || u.last_name, u.first_name, u.last_name, u.email) as full_name,
-     u.email, e.location, e.team, e.manager_id, e.role
+    `SELECT 
+     e.employee_id, 
+          COALESCE(
+            NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+            NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+            u.email
+          ) as full_name,
+     u.email, 
+     u.phone_number,
+     e.location, 
+     e.team, 
+     e.manager_id,
+     e.admin_id,
+     u.role,
+     u.designation,
+     u.department,
+     (
+       SELECT hod_u.email 
+       FROM employees hod_e 
+       JOIN users hod_u ON hod_u.user_id = hod_e.user_id 
+       WHERE hod_e.employee_id = e.manager_id
+         AND LOWER(TRIM(COALESCE(hod_u.role, ''))) = 'hod'
+       LIMIT 1
+     ) as hod_email,
+     (
+       SELECT admin_u.email 
+       FROM employees admin_e 
+       JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
+       WHERE admin_e.employee_id = e.admin_id
+         AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
+       LIMIT 1
+     ) as admin_email
      FROM employees e
      JOIN users u ON e.user_id = u.user_id
      WHERE u.user_id = $1`,
@@ -267,6 +405,48 @@ export const GetAdminsListService = async (Request) => {
          u.email
        ) ASC`
     );
+    
+    // Ensure all Admins have employee records - create them if missing
+    for (const admin of result.rows) {
+      if (!admin.employee_id) {
+        try {
+          const createResult = await database.query(
+            `INSERT INTO employees (user_id, role)
+             VALUES ($1, 'admin')
+             ON CONFLICT (user_id) DO UPDATE SET
+               role = 'admin'
+             RETURNING employee_id`,
+            [admin.user_id]
+          );
+          
+          if (createResult.rows.length > 0 && createResult.rows[0].employee_id) {
+            admin.employee_id = createResult.rows[0].employee_id;
+          } else {
+            // If RETURNING didn't work, fetch it
+            const fetchResult = await database.query(
+              'SELECT employee_id FROM employees WHERE user_id = $1',
+              [admin.user_id]
+            );
+            if (fetchResult.rows.length > 0) {
+              admin.employee_id = fetchResult.rows[0].employee_id;
+            }
+          }
+        } catch (createError) {
+          // If INSERT fails (duplicate), fetch existing
+          if (createError.code === '23505' || createError.message.includes('duplicate') || createError.message.includes('unique')) {
+            const existing = await database.query(
+              'SELECT employee_id FROM employees WHERE user_id = $1',
+              [admin.user_id]
+            );
+            if (existing.rows.length > 0) {
+              admin.employee_id = existing.rows[0].employee_id;
+            }
+          } else {
+            console.warn(`Failed to create employee record for Admin ${admin.email}:`, createError.message);
+          }
+        }
+      }
+    }
     
     return {
       Data: result.rows
@@ -556,17 +736,18 @@ export const GetAllUsersService = async (Request) => {
         u.user_id::text as employee_id,
         u.email,
         u.phone_number,
-        COALESCE(
-          NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
-          NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
-          u.email
-        ) as full_name,
+          COALESCE(
+            NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
+            NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
+            u.email
+          ) as full_name,
         u.role as role,
         u.status,
         e.employee_id,
-        e.team,
+        u.department as team,
+        u.department,
         e.location,
-        e.designation,
+        u.designation,
         e.manager_id,
         (
           SELECT hod_u.email 
@@ -588,28 +769,18 @@ export const GetAllUsersService = async (Request) => {
           LIMIT 1
         ) as hod_name,
         e.admin_id,
-        (
-          SELECT admin_u.email 
-          FROM employees admin_e 
-          JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
-          WHERE admin_e.employee_id = e.admin_id
-            AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
-          LIMIT 1
-        ) as admin_email,
-        (
-          SELECT COALESCE(
-            NULLIF(TRIM(admin_u.first_name || ' ' || COALESCE(admin_u.last_name, '')), ''),
-            admin_u.email
-          )
-          FROM employees admin_e 
-          JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
-          WHERE admin_e.employee_id = e.admin_id
-            AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
-          LIMIT 1
+        admin_u.email as admin_email,
+        COALESCE(
+          NULLIF(TRIM(admin_u.first_name || ' ' || COALESCE(admin_u.last_name, '')), ''),
+          admin_u.email
         ) as admin_name
        FROM users u
        LEFT JOIN employees e ON e.user_id = u.user_id
+       LEFT JOIN employees admin_e ON admin_e.employee_id = e.admin_id
+       LEFT JOIN users admin_u ON admin_u.user_id = admin_e.user_id 
+         AND LOWER(TRIM(COALESCE(admin_u.role, ''))) = 'admin'
        WHERE u.role IS NOT NULL
+       AND (u.status = 'Active' OR u.status IS NULL OR u.status = '')
        ORDER BY COALESCE(
          NULLIF(TRIM(COALESCE(u.first_name, '')), ''),
          NULLIF(TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')), ''),
@@ -617,8 +788,29 @@ export const GetAllUsersService = async (Request) => {
        ) ASC`
     );
 
+    // CRITICAL: Ensure admin_id, admin_name, and admin_email are always in response
+    const mappedRows = result.rows.map(row => ({
+      ...row,
+      admin_id: row.admin_id ?? null,
+      admin_name: row.admin_name ?? null,
+      admin_email: row.admin_email ?? null,
+    }));
+    
+    console.log(`\n✅ GetAllUsersService: Mapped ${mappedRows.length} results with guaranteed admin fields`);
+    // Log sample HOD to verify
+    const sampleHod = mappedRows.find(r => r.role && (r.role.toLowerCase() === 'hod' || r.role.toLowerCase() === 'h.o.d'));
+    if (sampleHod) {
+      console.log(`📋 Sample HOD in GetAllUsersService response:`, {
+        name: sampleHod.full_name,
+        email: sampleHod.email,
+        admin_id: sampleHod.admin_id,
+        admin_name: sampleHod.admin_name,
+        admin_email: sampleHod.admin_email
+      });
+    }
+
     return {
-      Data: result.rows
+      Data: mappedRows
     };
   } catch (error) {
     console.error('GetAllUsersService error:', error);
@@ -717,6 +909,13 @@ export const UpdateEmployeeService = async (Request) => {
       paramCount++;
     }
 
+    // Update designation in users table (NOT in employees table)
+    if (designation !== undefined) {
+      userUpdateQuery += `, designation = $${paramCount}`;
+      userParams.push(designation || null);
+      paramCount++;
+    }
+
     // Update phone_number in users table
     // NOTE: Phone number does NOT affect location or country_code
     // Location is ONLY set from the location dropdown field
@@ -726,11 +925,17 @@ export const UpdateEmployeeService = async (Request) => {
       paramCount++;
     }
 
-    // Handle full_name - try first_name/last_name first, fallback to full_name
+    // Handle full_name - split into first_name and last_name, preserving spaces
     if (full_name) {
-      const nameParts = full_name.split(' ');
+      // Trim the name but preserve internal spaces (don't collapse multiple spaces)
+      const trimmedName = full_name.trim();
+      const nameParts = trimmedName.split(/\s+/);
       const firstName = nameParts[0] || '';
-      const lastName = nameParts.slice(1).join(' ') || '';
+      // Join all remaining parts as last name (preserves spaces between words)
+      // This handles names like "John  Middle  Last" -> first_name="John", last_name="Middle Last"
+      const lastName = nameParts.slice(1).join(' ').trim() || '';
+      
+      console.log(`📝 Processing name: "${full_name}" -> first_name: "${firstName}", last_name: "${lastName}"`);
       
       // Try to update first_name and last_name (if columns exist)
       // If they don't exist, the query will fail and we'll catch it
@@ -776,6 +981,12 @@ export const UpdateEmployeeService = async (Request) => {
           retryCount++;
         }
         
+        if (designation !== undefined) {
+          retryQuery += `, designation = $${retryCount}`;
+          retryParams.push(designation || null);
+          retryCount++;
+        }
+        
         if (phone_number !== undefined) {
           retryQuery += `, phone_number = $${retryCount}`;
           retryParams.push(phone_number || null);
@@ -783,8 +994,10 @@ export const UpdateEmployeeService = async (Request) => {
         }
         
         if (full_name) {
+          // Normalize the name (trim and handle multiple spaces)
+          const normalizedName = full_name.trim().replace(/\s+/g, ' ');
           retryQuery += `, full_name = $${retryCount}`;
-          retryParams.push(full_name);
+          retryParams.push(normalizedName);
           retryCount++;
         }
         
@@ -807,6 +1020,25 @@ export const UpdateEmployeeService = async (Request) => {
 
     if (userResult.rowCount === 0) {
       throw CreateError("User not found", 404);
+    }
+    
+    // Verify name was updated correctly
+    if (full_name) {
+      try {
+        const verifyNameResult = await database.query(
+          'SELECT first_name, last_name, full_name FROM users WHERE user_id = $1',
+          [userId]
+        );
+        if (verifyNameResult.rows.length > 0) {
+          const dbFirstName = verifyNameResult.rows[0].first_name || '';
+          const dbLastName = verifyNameResult.rows[0].last_name || '';
+          const dbFullName = verifyNameResult.rows[0].full_name || '';
+          const reconstructedName = (dbFirstName + ' ' + dbLastName).trim() || dbFullName;
+          console.log(`✅ Name update verified: first_name="${dbFirstName}", last_name="${dbLastName}", full_name="${dbFullName}", reconstructed="${reconstructedName}"`);
+        }
+      } catch (verifyError) {
+        console.warn('⚠️ Could not verify name update:', verifyError.message);
+      }
     }
 
     // Update employees table
@@ -910,12 +1142,9 @@ export const UpdateEmployeeService = async (Request) => {
       hasOtherFields = true;
     }
 
-    if (designation !== undefined) {
-      empUpdateQuery += `, designation = $${paramCount}`;
-      empParams.push(designation || null);
-      paramCount++;
-      hasOtherFields = true;
-    }
+    // NOTE: designation is in users table, not employees table
+    // Do NOT add designation to employees UPDATE query
+    // It will be handled in the users table UPDATE above
 
     // Handle HOD assignment (manager_id)
     let hodEmployeeId = null;
@@ -1159,47 +1388,154 @@ export const UpdateEmployeeService = async (Request) => {
     }
 
     // Handle admin_id assignment (for HODs)
+    // CRITICAL: Always process admin_id if it's provided in the request OR if role is HOD
     let shouldUpdateAdminId = false;
     let adminEmployeeId = null;
-    if (admin_id !== undefined) {
-      // Always update admin_id if it's in the request (even if null or empty)
+    let finalAdminId = null; // Store final value for verification (declared at function scope)
+    console.log(`\n🔵 ========== ADMIN ASSIGNMENT START ==========`);
+    console.log(`🔵 User ID being updated: ${userId}`);
+    console.log(`🔵 Received admin_id: ${admin_id} (type: ${typeof admin_id}, value: ${JSON.stringify(admin_id)})`);
+    console.log(`🔵 Request body keys: ${Object.keys(Request.body).join(', ')}`);
+    console.log(`🔵 Full request body: ${JSON.stringify(Request.body)}`);
+    console.log(`🔵 Current role: ${normalizedRole || 'not provided'}`);
+    console.log(`🔵 Final role: ${finalRole || 'not provided'}`);
+    
+    // CRITICAL: If role is HOD, we MUST process admin_id (even if not explicitly provided)
+    // This ensures admin_id is always handled for HODs
+    const isHodRole = finalRole === 'hod' || normalizedRole?.toLowerCase() === 'hod';
+    
+    // ALWAYS process admin_id if it's in the request body OR if role is HOD
+    if (admin_id !== undefined || isHodRole) {
       shouldUpdateAdminId = true;
-      if (admin_id && admin_id !== '' && admin_id !== null) {
-        // Find Admin's employee_id
-        try {
-          const adminResult = await database.query(
-            `SELECT e.employee_id, e.user_id, u.email, u.role
-             FROM employees e
-             JOIN users u ON u.user_id = e.user_id
-             WHERE (e.employee_id = $1 OR e.employee_id::text = $1 OR e.user_id = $1 OR e.user_id::text = $1)
-               AND LOWER(TRIM(u.role)) = 'admin'
-             LIMIT 1`,
-            [admin_id]
-          );
-          
-          if (adminResult.rows.length > 0) {
-            adminEmployeeId = adminResult.rows[0].employee_id;
-            console.log(`✅ Found Admin employee_id: ${adminEmployeeId}`);
-          } else {
-            console.warn(`⚠️ Admin not found with admin_id: ${admin_id}`);
+      if (admin_id !== undefined) {
+        console.log(`✅ admin_id is provided in request (value: ${admin_id}), will update`);
+      } else if (isHodRole) {
+        console.log(`✅ Role is HOD but admin_id not in request - will process anyway (may be null)`);
+        // If admin_id is not provided but role is HOD, set it to null explicitly
+        // This allows clearing admin_id when needed
+        admin_id = null;
+      }
+      
+      if (admin_id && admin_id !== '' && admin_id !== null && admin_id !== 'null' && admin_id !== 'undefined') {
+        console.log(`🔍 admin_id has a value (${admin_id}), processing...`);
+        
+        // CRITICAL: Frontend sends employee_id directly, so try to use it as-is first
+        // Parse the admin_id to ensure it's a number
+        const parsedAdminId = parseInt(admin_id, 10);
+        
+        if (!isNaN(parsedAdminId) && parsedAdminId > 0) {
+          // Verify the employee_id exists in employees table
+          try {
+            const verifyEmp = await database.query(
+              'SELECT employee_id, user_id FROM employees WHERE employee_id = $1',
+              [parsedAdminId]
+            );
+            
+            if (verifyEmp.rows.length > 0) {
+              // Employee exists - use it directly (frontend already validated it's an Admin)
+              adminEmployeeId = parsedAdminId;
+              console.log(`✅ Using admin_id directly as employee_id: ${adminEmployeeId} (employee exists)`);
+              
+              // Optional: Verify it's actually an Admin (for logging only, don't fail if not)
+              try {
+                const roleCheck = await database.query(
+                  'SELECT u.role FROM users u JOIN employees e ON e.user_id = u.user_id WHERE e.employee_id = $1',
+                  [parsedAdminId]
+                );
+                if (roleCheck.rows.length > 0) {
+                  const role = roleCheck.rows[0].role;
+                  console.log(`   User role: ${role} (${role?.toLowerCase() === 'admin' ? '✅ Admin' : '⚠️ Not Admin, but using anyway'})`);
+                }
+              } catch (roleError) {
+                console.warn('   Could not verify role, but proceeding with admin_id');
+              }
+            } else {
+              console.warn(`⚠️ Employee with employee_id ${parsedAdminId} does not exist - will set to NULL`);
+              adminEmployeeId = null;
+            }
+          } catch (verifyError) {
+            console.error('❌ Error verifying employee_id:', verifyError.message);
+            // Even if verification fails, if it's a valid number, use it
+            adminEmployeeId = parsedAdminId;
+            console.log(`⚠️ Verification failed, but using admin_id directly: ${adminEmployeeId}`);
           }
-        } catch (adminError) {
-          console.error('❌ Failed to find Admin employee_id:', adminError);
-          shouldUpdateAdminId = false;
+        } else {
+          console.warn(`⚠️ admin_id is not a valid number: ${admin_id} - will set to NULL`);
+          adminEmployeeId = null;
         }
       } else {
-        // Empty string means clear the Admin assignment
-        console.log('📝 admin_id is empty, will set admin_id to NULL');
+        // Empty string, null, or invalid value means clear the Admin assignment
+        console.log(`📝 admin_id is empty/null/invalid (${admin_id}), will set admin_id to NULL`);
         adminEmployeeId = null;
       }
       
-      if (shouldUpdateAdminId) {
-        empUpdateQuery += `, admin_id = $${paramCount}`;
-        empParams.push(adminEmployeeId);
-        paramCount++;
-        hasOtherFields = true;
+      // CRITICAL: Always add admin_id to UPDATE query if it was provided
+      console.log(`\n🔵 STEP 2: Adding admin_id to UPDATE query`);
+      console.log(`📝 admin_id value to save: ${adminEmployeeId || 'NULL'}`);
+      console.log(`📝 Original admin_id from request: ${admin_id}`);
+      console.log(`📝 Looked up adminEmployeeId: ${adminEmployeeId}`);
+      
+      // CRITICAL: If lookup failed but we have a valid admin_id value, try using it directly
+      // This handles cases where the Admin exists but lookup query has issues
+      if (!adminEmployeeId && admin_id && admin_id !== '' && admin_id !== null) {
+        // Try to parse as integer (employee_id is usually an integer)
+        const parsedAdminId = parseInt(admin_id, 10);
+        if (!isNaN(parsedAdminId) && parsedAdminId > 0) {
+          console.log(`⚠️ Admin lookup returned null, but admin_id value looks valid (${parsedAdminId}). Will try direct save.`);
+          // Verify the Admin exists before using direct value
+          try {
+            const verifyAdmin = await database.query(
+              'SELECT employee_id FROM employees WHERE employee_id = $1',
+              [parsedAdminId]
+            );
+            if (verifyAdmin.rows.length > 0) {
+              adminEmployeeId = parsedAdminId;
+              console.log(`✅ Verified Admin exists with employee_id: ${adminEmployeeId}, using direct value`);
+            } else {
+              console.warn(`⚠️ Admin with employee_id ${parsedAdminId} does not exist, will save as NULL`);
+            }
+          } catch (verifyError) {
+            console.error('❌ Error verifying Admin:', verifyError.message);
+          }
+        }
       }
+      
+      // CRITICAL: Ensure adminEmployeeId is properly converted
+      // Convert empty string to null, and ensure it's a number or null
+      finalAdminId = null; // Reset to null first (using function-scoped variable)
+      if (adminEmployeeId !== null && adminEmployeeId !== undefined) {
+        // If it's already a number, use it
+        if (typeof adminEmployeeId === 'number') {
+          finalAdminId = adminEmployeeId;
+        } else if (typeof adminEmployeeId === 'string' && adminEmployeeId.trim() !== '') {
+          // If it's a non-empty string, try to parse it
+          const parsed = parseInt(adminEmployeeId, 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            finalAdminId = parsed;
+          }
+        } else {
+          // Try to convert to number if possible
+          const parsed = parseInt(adminEmployeeId, 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            finalAdminId = parsed;
+          }
+        }
+      }
+      
+      // CRITICAL: Always add admin_id to UPDATE query - even if null (to allow clearing)
+      empUpdateQuery += `, admin_id = $${paramCount}`;
+      empParams.push(finalAdminId);
+      console.log(`✅ Added admin_id = $${paramCount} to query`);
+      console.log(`📝 Final admin_id value being saved: ${finalAdminId || 'NULL'} (type: ${typeof finalAdminId})`);
+      console.log(`📝 Current query: ${empUpdateQuery}`);
+      console.log(`📝 Current params (${empParams.length}): ${JSON.stringify(empParams)}`);
+      console.log(`📝 Param at index ${paramCount - 1}: ${JSON.stringify(empParams[paramCount - 1])}`);
+      paramCount++;
+      hasOtherFields = true;
+    } else {
+      console.log('📝 admin_id is undefined in request, skipping admin_id update (keeping existing value)');
     }
+    console.log(`🔵 ========== ADMIN ASSIGNMENT COMPLETE ==========\n`);
     
     // If only manager_id is being updated (no other fields), make sure the query is valid
     if (!hasOtherFields && shouldUpdateManagerId) {
@@ -1241,6 +1577,69 @@ export const UpdateEmployeeService = async (Request) => {
     try {
       const empUpdateResult = await database.query(empUpdateQuery, empParams);
       console.log(`✅ STEP 3 RESULT: Employees table updated. Rows affected: ${empUpdateResult.rowCount}`);
+      
+      // CRITICAL: Verify and fix admin_id if it was supposed to be updated
+      if (shouldUpdateAdminId) {
+        console.log(`\n🔵 STEP 4: Verifying admin_id was saved correctly`);
+        console.log(`📝 Expected admin_id value: ${finalAdminId || 'NULL'} (type: ${typeof finalAdminId})`);
+        console.log(`📝 Original adminEmployeeId: ${adminEmployeeId || 'NULL'}`);
+        try {
+          // Wait a tiny bit to ensure transaction is committed
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          const verifyAdminResult = await database.query(
+            'SELECT employee_id, admin_id, role FROM employees WHERE user_id = $1',
+            [userId]
+          );
+          if (verifyAdminResult.rows.length > 0) {
+            const savedAdminId = verifyAdminResult.rows[0].admin_id;
+            const employeeId = verifyAdminResult.rows[0].employee_id;
+            const employeeRole = verifyAdminResult.rows[0].role;
+            // Use finalAdminId if available, otherwise fall back to adminEmployeeId
+            const expectedAdminId = finalAdminId !== null && finalAdminId !== undefined ? finalAdminId : adminEmployeeId;
+            console.log(`📝 VERIFY: employee_id: ${employeeId}, role: ${employeeRole}`);
+            console.log(`📝 VERIFY: admin_id in database: ${savedAdminId || 'NULL'} (type: ${typeof savedAdminId}), expected: ${expectedAdminId || 'NULL'}`);
+            console.log(`📝 finalAdminId: ${finalAdminId || 'NULL'}, adminEmployeeId: ${adminEmployeeId || 'NULL'}`);
+            
+            // Compare values (handling null/undefined and type conversion)
+            const savedValue = savedAdminId === null || savedAdminId === undefined ? null : Number(savedAdminId);
+            const expectedValue = expectedAdminId === null || expectedAdminId === undefined ? null : Number(expectedAdminId);
+            
+            if (savedValue !== expectedValue) {
+              console.warn(`⚠️ ADMIN_ID MISMATCH DETECTED! Expected ${expectedValue || 'NULL'}, but got ${savedValue || 'NULL'}. Attempting to fix...`);
+              console.warn(`   UPDATE query was: ${empUpdateQuery}`);
+              console.warn(`   UPDATE params were: ${JSON.stringify(empParams)}`);
+              try {
+                // Use the final value we calculated
+                const fixResult = await database.query(
+                  'UPDATE employees SET admin_id = $1, updated_at = NOW() WHERE user_id = $2',
+                  [expectedAdminId, userId]
+                );
+                console.log(`🔧 ADMIN_ID FIX: Direct UPDATE executed. Rows affected: ${fixResult.rowCount}`);
+                
+                // Verify the fix worked
+                const verifyFixResult = await database.query(
+                  'SELECT admin_id FROM employees WHERE user_id = $1',
+                  [userId]
+                );
+                if (verifyFixResult.rows.length > 0) {
+                  const fixedAdminId = verifyFixResult.rows[0].admin_id;
+                  console.log(`✅ ADMIN_ID FIX VERIFIED: admin_id is now ${fixedAdminId || 'NULL'}`);
+                }
+              } catch (fixError) {
+                console.error('❌ Failed to fix admin_id:', fixError.message);
+                console.error('Fix error details:', fixError);
+              }
+            } else {
+              console.log(`✅ VERIFIED: admin_id matches expected value (${savedValue || 'NULL'})`);
+            }
+          } else {
+            console.warn(`⚠️ No employee record found for user_id: ${userId} to verify admin_id`);
+          }
+        } catch (verifyError) {
+          console.error('❌ Failed to verify admin_id:', verifyError.message);
+        }
+      }
       
       // ALWAYS verify location was actually updated (even if normalizedLocation is null)
       if (location !== undefined && empUpdateResult.rowCount > 0) {
@@ -1368,7 +1767,7 @@ export const UpdateEmployeeService = async (Request) => {
         }
       }
       
-      if (empUpdateResult.rowCount === 0 && !employeeExists && (location !== undefined || shouldUpdateManagerId || department !== undefined || designation !== undefined)) {
+      if (empUpdateResult.rowCount === 0 && !employeeExists && (location !== undefined || shouldUpdateManagerId || department !== undefined || shouldUpdateAdminId)) {
         console.warn('⚠️ No rows were updated in employees table. Employee record might not exist. Attempting to insert/upsert...');
         // Try to insert/upsert the employee record
         try {
@@ -1926,71 +2325,96 @@ export const DeleteEmployeeService = async (Request) => {
       console.warn('Error checking employee record:', empCheckError.message);
     }
 
-    // Check if user has pending leave applications (only if employee_id exists)
-    if (employeeId) {
-      const leaveCheck = await database.query(
-        `SELECT COUNT(*) as count FROM leave_applications 
-         WHERE employee_id = $1 AND (hod_status = 'Pending' OR admin_status = 'Pending')`,
-        [employeeId]
-      );
+    // Store email before deletion for response
+    const userEmail = user.email;
 
-      const pendingLeaves = parseInt(leaveCheck.rows[0]?.count || 0);
-      if (pendingLeaves > 0) {
-        throw CreateError(`Cannot delete employee: ${pendingLeaves} pending leave application(s) exist. Please process or delete leaves first.`, 400);
+    // Delete related records first (in correct order to avoid foreign key violations)
+    // 1. Delete leave applications (all leaves, not just pending)
+    if (employeeId) {
+      try {
+        const leaveDeleteResult = await database.query(
+          'DELETE FROM leave_applications WHERE employee_id = $1',
+          [employeeId]
+        );
+        console.log(`✅ Deleted ${leaveDeleteResult.rowCount} leave application(s) for employee_id: ${employeeId}`);
+      } catch (leaveError) {
+        console.warn('Error deleting leave applications:', leaveError.message);
+        // Continue even if leaves don't exist
       }
     }
 
+    // 2. Delete leave balance records
+    if (employeeId) {
+      try {
+        const balanceDeleteResult = await database.query(
+          'DELETE FROM leave_balance WHERE employee_id = $1',
+          [employeeId]
+        );
+        console.log(`✅ Deleted ${balanceDeleteResult.rowCount} leave balance record(s) for employee_id: ${employeeId}`);
+      } catch (balanceError) {
+        console.warn('Error deleting leave balance:', balanceError.message);
+        // Continue even if balance doesn't exist
+      }
+    }
 
-    // Delete related records first (in correct order to avoid foreign key violations)
-    // 1. Delete user permissions
+    // 3. Delete user permissions
     try {
-      await database.query(
+      const permDeleteResult = await database.query(
         'DELETE FROM user_permissions WHERE user_id = $1',
         [userId]
       );
+      console.log(`✅ Deleted ${permDeleteResult.rowCount} user permission(s) for user_id: ${userId}`);
     } catch (permError) {
       console.warn('Error deleting user permissions:', permError.message);
       // Continue even if permissions don't exist
     }
 
-    // 2. Delete employee blocked dates
+    // 4. Delete employee blocked dates
     if (employeeId) {
       try {
-        await database.query(
+        const blockedDeleteResult = await database.query(
           'DELETE FROM employee_blocked_dates WHERE employee_id = $1',
           [employeeId]
         );
+        console.log(`✅ Deleted ${blockedDeleteResult.rowCount} employee blocked date(s) for employee_id: ${employeeId}`);
       } catch (blockedError) {
         console.warn('Error deleting employee blocked dates:', blockedError.message);
       }
     }
 
-    // 3. Delete employee record (if exists)
-    try {
-      await database.query(
-        'DELETE FROM employees WHERE user_id = $1',
-        [userId]
-      );
-    } catch (empError) {
-      console.warn('Error deleting employee record:', empError.message);
-      // Continue even if employee record doesn't exist
+    // 5. Delete employee record (if exists)
+    if (employeeId) {
+      try {
+        const empDeleteResult = await database.query(
+          'DELETE FROM employees WHERE user_id = $1',
+          [userId]
+        );
+        console.log(`✅ Deleted employee record for user_id: ${userId}`);
+      } catch (empError) {
+        console.warn('Error deleting employee record:', empError.message);
+        // Continue even if employee record doesn't exist
+      }
     }
 
-    // 4. Soft delete user by setting status = 'Inactive'
+    // 6. Hard delete user record (including email)
     const result = await database.query(
-      `UPDATE users SET status = 'Inactive', updated_at = NOW() WHERE user_id = $1 RETURNING user_id, email, status`,
+      `DELETE FROM users WHERE user_id = $1 RETURNING user_id, email`,
       [userId]
     );
 
     if (result.rows.length === 0) {
-      throw CreateError("Failed to update user status", 500);
+      throw CreateError("Failed to delete user", 500);
     }
 
-    console.log(`✅ Employee deleted successfully: user_id=${userId}, email=${result.rows[0].email}, status=${result.rows[0].status}`);
+    console.log(`✅ User deleted successfully: user_id=${userId}, email=${result.rows[0].email}`);
 
     return {
       message: "Employee deleted successfully",
-      data: result.rows[0]
+      data: {
+        user_id: result.rows[0].user_id,
+        email: result.rows[0].email,
+        deleted: true
+      }
     };
   } catch (error) {
     console.error('DeleteEmployeeService error:', error);

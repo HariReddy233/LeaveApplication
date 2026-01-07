@@ -5,7 +5,14 @@ import { HashPassword } from "../../utility/BcryptHelper.js";
 import database from "../../config/database.js";
 
 const RegistrationService = async (Request) => {
-  const { email, password, role, department, hod_id, first_name, last_name, full_name, designation, location, phone_number } = Request.body;
+  const { email, password, role, department, hod_id, admin_id, first_name, last_name, full_name, designation, location, phone_number } = Request.body;
+  
+  console.log(`\n🔵 ========== REGISTRATION START ==========`);
+  console.log(`🔵 Received admin_id: ${admin_id} (type: ${typeof admin_id}, value: ${JSON.stringify(admin_id)})`);
+  console.log(`🔵 Received role: ${role}`);
+  console.log(`🔵 Received location: ${location} (type: ${typeof location})`);
+  console.log(`🔵 Received hod_id: ${hod_id} (type: ${typeof hod_id})`);
+  console.log(`🔵 Request body keys:`, Object.keys(Request.body));
 
   if (!email || !password) {
     throw CreateError("Email and password are required", 400);
@@ -22,15 +29,14 @@ const RegistrationService = async (Request) => {
     throw CreateError("Password must be at least 6 characters", 400);
   }
 
-  // Check if user already exists (exclude inactive/deleted users to allow re-creation)
+  // Check if user already exists (including inactive/deleted users)
+  // If found and inactive/deleted, clean it up before creating new user
   let existingUser;
   try {
-    // Database uses user_id as primary key
-    // Only check for active users - allow re-creating deleted users
+    // Check for ANY user with this email (active or inactive)
     existingUser = await database.query(
-      `SELECT user_id, email FROM users 
+      `SELECT user_id, email, status FROM users 
        WHERE LOWER(email) = $1 
-       AND (status = 'Active' OR status IS NULL OR status = '')
        LIMIT 1`,
       [email.toLowerCase()]
     );
@@ -39,8 +45,69 @@ const RegistrationService = async (Request) => {
     throw CreateError(`Database error: ${dbError.message}`, 500);
   }
 
+  // If user exists and is active, throw error
   if (existingUser.rows.length > 0) {
-    throw CreateError("User already exists with this email", 409);
+    const existingUserData = existingUser.rows[0];
+    const isActive = !existingUserData.status || existingUserData.status === 'Active' || existingUserData.status === '';
+    
+    if (isActive) {
+      throw CreateError("User already exists with this email", 409);
+    } else {
+      // User exists but is inactive/deleted - clean it up completely before creating new one
+      console.log(`⚠️ Found inactive/deleted user with email ${email}, cleaning up before re-creation...`);
+      const existingUserId = existingUserData.user_id;
+      
+      try {
+        // Get employee_id if exists
+        let existingEmployeeId = null;
+        try {
+          const empCheck = await database.query(
+            'SELECT employee_id FROM employees WHERE user_id = $1 LIMIT 1',
+            [existingUserId]
+          );
+          if (empCheck.rows.length > 0) {
+            existingEmployeeId = empCheck.rows[0].employee_id;
+          }
+        } catch (empCheckError) {
+          console.warn('Error checking employee record:', empCheckError.message);
+        }
+        
+        // Delete all related records first
+        if (existingEmployeeId) {
+          // Delete leave applications
+          try {
+            await database.query('DELETE FROM leave_applications WHERE employee_id = $1', [existingEmployeeId]);
+          } catch (e) { console.warn('Error deleting leave applications:', e.message); }
+          
+          // Delete leave balance
+          try {
+            await database.query('DELETE FROM leave_balance WHERE employee_id = $1', [existingEmployeeId]);
+          } catch (e) { console.warn('Error deleting leave balance:', e.message); }
+          
+          // Delete employee blocked dates
+          try {
+            await database.query('DELETE FROM employee_blocked_dates WHERE employee_id = $1', [existingEmployeeId]);
+          } catch (e) { console.warn('Error deleting blocked dates:', e.message); }
+        }
+        
+        // Delete user permissions
+        try {
+          await database.query('DELETE FROM user_permissions WHERE user_id = $1', [existingUserId]);
+        } catch (e) { console.warn('Error deleting permissions:', e.message); }
+        
+        // Delete employee record
+        try {
+          await database.query('DELETE FROM employees WHERE user_id = $1', [existingUserId]);
+        } catch (e) { console.warn('Error deleting employee record:', e.message); }
+        
+        // Finally, delete the user record
+        await database.query('DELETE FROM users WHERE user_id = $1', [existingUserId]);
+        console.log(`✅ Cleaned up inactive/deleted user: user_id=${existingUserId}, email=${email}`);
+      } catch (cleanupError) {
+        console.error('Error cleaning up inactive user:', cleanupError);
+        // Continue anyway - the INSERT might still work if cleanup partially succeeded
+      }
+    }
   }
 
   // Hash password
@@ -125,18 +192,123 @@ const RegistrationService = async (Request) => {
 
     if (!existingEmployee || existingEmployee.rows.length === 0) {
       // Get HOD employee_id if hod_id is provided
+      // Use same multi-strategy lookup as UpdateEmployeeService
       let hodEmployeeId = null;
-      if (hod_id) {
+      if (hod_id && hod_id !== '') {
         try {
-          const hodResult = await database.query(
-            'SELECT employee_id FROM employees WHERE user_id = $1 LIMIT 1',
-            [hod_id]
+          console.log(`🔍 Looking up HOD with hod_id: ${hod_id} (type: ${typeof hod_id})`);
+          
+          // Strategy 1: Try to find by employee_id first (most direct)
+          console.log(`🔍 STEP 1: Trying to find HOD by employee_id...`);
+          let hodResult = await database.query(
+            `SELECT employee_id, user_id 
+             FROM employees 
+             WHERE employee_id::text = $1 
+                OR employee_id = $1::integer
+                OR employee_id::text = CAST($1 AS TEXT)
+             LIMIT 1`,
+            [hod_id.toString()]
           );
+          
           if (hodResult.rows.length > 0) {
             hodEmployeeId = hodResult.rows[0].employee_id;
+            const foundUserId = hodResult.rows[0].user_id;
+            console.log(`✅ Found HOD by employee_id: ${hodEmployeeId} (user_id: ${foundUserId})`);
+          } else {
+            // Strategy 2: Try to find by user_id
+            console.log(`⚠️ Not found by employee_id. Trying user_id lookup...`);
+            let userCheck;
+            try {
+              // First try as integer
+              const hodIdInt = parseInt(hod_id, 10);
+              if (!isNaN(hodIdInt)) {
+                userCheck = await database.query(
+                  `SELECT user_id, email, role, 
+                          COALESCE(NULLIF(TRIM(first_name || ' ' || COALESCE(last_name, '')), ''), email) as full_name
+                   FROM users 
+                   WHERE user_id = $1
+                   LIMIT 1`,
+                  [hodIdInt]
+                );
+              }
+              
+              // If not found as integer, try as text
+              if (!userCheck || userCheck.rows.length === 0) {
+                userCheck = await database.query(
+                  `SELECT user_id, email, role, 
+                          COALESCE(NULLIF(TRIM(first_name || ' ' || COALESCE(last_name, '')), ''), email) as full_name
+                   FROM users 
+                   WHERE user_id::text = $1
+                      OR CAST(user_id AS TEXT) = $1
+                   LIMIT 1`,
+                  [hod_id.toString()]
+                );
+              }
+            } catch (userQueryError) {
+              console.error(`❌ Error in user_id lookup:`, userQueryError.message);
+              throw userQueryError;
+            }
+            
+            if (userCheck && userCheck.rows.length > 0) {
+              const hodUser = userCheck.rows[0];
+              console.log(`✅ Found HOD user: ${hodUser.email} (user_id: ${hodUser.user_id})`);
+              
+              // Now check if this user has an employee record
+              console.log(`🔍 Checking if HOD user has employee record...`);
+              hodResult = await database.query(
+                `SELECT employee_id, user_id 
+                 FROM employees 
+                 WHERE user_id = $1 
+                 LIMIT 1`,
+                [hodUser.user_id]
+              );
+              
+              if (hodResult.rows.length > 0) {
+                hodEmployeeId = hodResult.rows[0].employee_id;
+                console.log(`✅ Found HOD employee_id: ${hodEmployeeId} from user_id: ${hodUser.user_id}`);
+              } else {
+                console.warn(`⚠️ HOD user ${hodUser.user_id} does not have an employee record`);
+              }
+            } else {
+              console.warn(`⚠️ HOD not found with hod_id: ${hod_id}`);
+            }
           }
         } catch (hodError) {
-          console.warn('Could not fetch HOD employee_id:', hodError.message);
+          console.error('❌ Could not fetch HOD employee_id:', hodError.message);
+          console.error('HOD lookup error details:', hodError);
+        }
+      }
+
+      // Get Admin employee_id if admin_id is provided (for HODs)
+      let adminEmployeeId = null;
+      // Process admin_id if role is HOD (even if admin_id is null, we need to set it)
+      if (normalizedRole === 'hod' || normalizedRole === 'HOD') {
+        if (admin_id && admin_id !== '' && admin_id !== null) {
+          try {
+            const adminResult = await database.query(
+              `SELECT e.employee_id, e.user_id, u.email, u.role
+               FROM employees e
+               JOIN users u ON u.user_id = e.user_id
+               WHERE (e.employee_id = $1 OR e.employee_id::text = $1 OR e.user_id = $1 OR e.user_id::text = $1)
+                 AND LOWER(TRIM(u.role)) = 'admin'
+               LIMIT 1`,
+              [admin_id]
+            );
+            if (adminResult.rows.length > 0) {
+              adminEmployeeId = adminResult.rows[0].employee_id;
+              console.log(`✅ Found Admin employee_id: ${adminEmployeeId} for admin_id: ${admin_id}`);
+            } else {
+              console.warn(`⚠️ Admin not found with admin_id: ${admin_id}`);
+              adminEmployeeId = null; // Explicitly set to null if not found
+            }
+          } catch (adminError) {
+            console.warn('Could not fetch Admin employee_id:', adminError.message);
+            adminEmployeeId = null; // Set to null on error
+          }
+        } else {
+          // admin_id is null or empty - explicitly set to null
+          console.log(`📝 admin_id is null/empty for HOD, will set admin_id to NULL`);
+          adminEmployeeId = null;
         }
       }
 
@@ -180,20 +352,98 @@ const RegistrationService = async (Request) => {
       
       // Try to insert employee record with ON CONFLICT
       try {
-        await database.query(
-          `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
+        console.log(`📝 Inserting employee with values:`, {
+          userId,
+          role: normalizedRole,
+          location: normalizedLocation,
+          team: department || null,
+          manager_id: hodEmployeeId,
+          admin_id: adminEmployeeId
+        });
+        const insertResult = await database.query(
+          `INSERT INTO employees (user_id, role, location, team, manager_id, admin_id)
            VALUES ($1, $2, $3, $4, $5, $6)
-           ON CONFLICT (user_id) DO NOTHING`,
+           ON CONFLICT (user_id) DO UPDATE SET
+             role = EXCLUDED.role,
+             location = EXCLUDED.location,
+             team = EXCLUDED.team,
+             manager_id = EXCLUDED.manager_id,
+             admin_id = EXCLUDED.admin_id,
+             updated_at = NOW()
+           RETURNING employee_id, location, manager_id, admin_id`,
           [
             userId,
             normalizedRole,
             normalizedLocation, // normalized location (IN or US)
             department || null, // team/department
-            designation || null,
-            hodEmployeeId // manager_id (HOD)
+            hodEmployeeId, // manager_id (HOD)
+            adminEmployeeId // admin_id (Admin for HODs)
           ]
         );
-        console.log('✅ Employee record created successfully');
+        if (insertResult.rows.length > 0) {
+          console.log('✅ Employee record created/updated successfully:', {
+            employee_id: insertResult.rows[0].employee_id,
+            location: insertResult.rows[0].location,
+            manager_id: insertResult.rows[0].manager_id,
+            admin_id: insertResult.rows[0].admin_id
+          });
+        } else {
+          console.warn('⚠️ INSERT returned no rows (might have been skipped by ON CONFLICT)');
+        }
+        
+        // Verify all fields were saved correctly
+        try {
+          const verifyResult = await database.query(
+            'SELECT employee_id, location, manager_id, admin_id, role FROM employees WHERE user_id = $1',
+            [userId]
+          );
+          if (verifyResult.rows.length > 0) {
+            const saved = verifyResult.rows[0];
+            console.log(`✅ VERIFIED Employee record saved:`, {
+              employee_id: saved.employee_id,
+              location: saved.location,
+              manager_id: saved.manager_id,
+              admin_id: saved.admin_id,
+              role: saved.role,
+              expected_location: normalizedLocation,
+              expected_manager_id: hodEmployeeId,
+              expected_admin_id: adminEmployeeId
+            });
+            
+            // Check for mismatches
+            if (saved.location !== normalizedLocation) {
+              console.warn(`⚠️ Location mismatch: saved="${saved.location}", expected="${normalizedLocation}"`);
+            }
+            if (saved.manager_id !== hodEmployeeId) {
+              console.warn(`⚠️ Manager ID mismatch: saved="${saved.manager_id}", expected="${hodEmployeeId}"`);
+            }
+            if (normalizedRole === 'hod' || normalizedRole === 'HOD') {
+              if (saved.admin_id !== adminEmployeeId) {
+                console.warn(`⚠️ Admin ID mismatch: saved="${saved.admin_id}", expected="${adminEmployeeId}"`);
+              }
+            }
+          } else {
+            console.error(`❌ VERIFICATION FAILED: No employee record found for user_id: ${userId}`);
+          }
+        } catch (verifyError) {
+          console.error('❌ Error verifying employee record:', verifyError.message);
+        }
+        
+        // Verify admin_id was saved (specific check for HODs)
+        if (normalizedRole === 'hod' || normalizedRole === 'HOD') {
+          try {
+            const verifyResult = await database.query(
+              'SELECT admin_id FROM employees WHERE user_id = $1',
+              [userId]
+            );
+            if (verifyResult.rows.length > 0) {
+              const savedAdminId = verifyResult.rows[0].admin_id;
+              console.log(`✅ VERIFIED: admin_id saved as ${savedAdminId} (expected: ${adminEmployeeId || 'NULL'})`);
+            }
+          } catch (verifyError) {
+            console.warn('⚠️ Could not verify admin_id:', verifyError.message);
+          }
+        }
       } catch (empInsertError) {
         // Log the full error for debugging
         console.error('❌ Employee insert error details:', {
@@ -206,21 +456,45 @@ const RegistrationService = async (Request) => {
         // If ON CONFLICT doesn't work, try simple INSERT
         if (empInsertError.code === '42P01' || empInsertError.code === '42703' || empInsertError.message.includes('ON CONFLICT') || empInsertError.message.includes('column')) {
           try {
-            await database.query(
-              `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-               VALUES ($1, $2, $3, $4, $5, $6)`,
+            const simpleInsertResult = await database.query(
+              `INSERT INTO employees (user_id, role, location, team, manager_id, admin_id)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING employee_id, location, manager_id, admin_id`,
               [
                 userId,
                 normalizedRole,
                 normalizedLocation, // normalized location (IN or US)
                 department || null,
-                designation || null,
-                hodEmployeeId
+                hodEmployeeId,
+                adminEmployeeId // admin_id (Admin for HODs)
               ]
             );
-            console.log('✅ Employee record created with simple INSERT');
+            if (simpleInsertResult.rows.length > 0) {
+              console.log('✅ Employee record created with simple INSERT:', {
+                employee_id: simpleInsertResult.rows[0].employee_id,
+                location: simpleInsertResult.rows[0].location,
+                manager_id: simpleInsertResult.rows[0].manager_id,
+                admin_id: simpleInsertResult.rows[0].admin_id
+              });
+            }
           } catch (simpleInsertError) {
-            console.warn('⚠️ Simple INSERT failed, trying minimal insert:', simpleInsertError.message);
+            // If error is due to missing admin_id column, retry without it
+            if (simpleInsertError.code === '42703' && simpleInsertError.message && simpleInsertError.message.includes('admin_id')) {
+              console.warn('⚠️ admin_id column does not exist. Retrying insert without admin_id...');
+              try {
+                await database.query(
+                  `INSERT INTO employees (user_id, role, location, team, manager_id)
+                   VALUES ($1, $2, $3, $4, $5)`,
+                  [userId, normalizedRole, normalizedLocation, department || null, hodEmployeeId]
+                );
+                console.log('✅ Employee record created without admin_id');
+              } catch (retryError) {
+                console.warn('⚠️ Retry insert failed, trying minimal insert:', retryError.message);
+                // Continue to minimal insert fallback
+                simpleInsertError = retryError;
+              }
+            }
+            
             // If that fails due to missing columns, try minimal insert
             if (simpleInsertError.code === '42703' || simpleInsertError.message.includes('column')) {
               try {

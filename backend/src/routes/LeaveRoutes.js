@@ -109,6 +109,18 @@ LeaveRoutes.post(
   LeaveControllers.CheckOverlappingLeaves,
 );
 
+//Calculate Working Days (excludes weekends and holidays)
+LeaveRoutes.post(
+  "/CalculateWorkingDays",
+  CheckEmployeeAuth,
+  LeaveControllers.CalculateWorkingDays,
+);
+LeaveRoutes.get(
+  "/CalculateWorkingDays",
+  CheckEmployeeAuth,
+  LeaveControllers.CalculateWorkingDays,
+);
+
 //Bulk Approve/Reject (Admin) - Requires leave.approve or leave.reject
 LeaveRoutes.post(
   "/BulkApprove",
