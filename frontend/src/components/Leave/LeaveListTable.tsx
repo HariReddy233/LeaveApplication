@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import ReactPaginate from 'react-paginate';
@@ -27,7 +27,7 @@ type LeaveListTableProps = {
 /**
  * Reusable Leave List Table Component - Matches HR Portal
  */
-export default function LeaveListTable({
+const LeaveListTable = ({
   endpoint,
   title,
   breadCrumbItems,
@@ -55,7 +55,7 @@ export default function LeaveListTable({
   onReject,
   status,
   method = 'GET',
-}: LeaveListTableProps) {
+}: LeaveListTableProps) => {
   const router = useRouter();
   const [pageNumber, setPageNumber] = useState(1);
   const [perPage, setPerPage] = useState(5);
@@ -620,26 +620,6 @@ export default function LeaveListTable({
 
       <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
         <div className="p-4">
-          {/* Action Buttons */}
-          <div className="flex justify-end mb-3">
-            <div className="flex gap-2">
-              <button
-                onClick={() => ExportDataJSON(leaves, 'Leave', 'xls')}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm flex items-center gap-2"
-                aria-label="Export leave data to Excel"
-              >
-                <FileSpreadsheet className="w-4 h-4" /> Export
-              </button>
-              <button
-                onClick={() => ExportDataJSON(leaves, 'Leave', 'csv')}
-                className="px-3 py-2 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-sm flex items-center gap-2"
-                aria-label="Export leave data to CSV"
-              >
-                <FileText className="w-4 h-4" /> Export CSV
-              </button>
-            </div>
-          </div>
-
           {/* User Filter and Status Filter */}
           <div className="mb-4 flex items-center gap-4 flex-wrap">
             {(userRole?.toLowerCase() === 'admin' || userRole?.toLowerCase() === 'hod') && (
@@ -702,7 +682,7 @@ export default function LeaveListTable({
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Leave Type</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Application Date</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Total Day</th>
-                  {/* Hide HOD Status column for Admin only */}
+                  {/* Hide HOD Status column for Admin, but show for others (will be conditionally hidden per row for HOD-applied leaves) */}
                   {userRole?.toLowerCase() !== 'admin' && (
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Hod Status</th>
                   )}
@@ -739,25 +719,45 @@ export default function LeaveListTable({
                           <DateFormatter date={record.createdAt || record.created_at} />
                         </td>
                         <td className="px-4 py-3 text-sm text-gray-900">{record.NumOfDay || record.number_of_days || 'N/A'}</td>
-                        {/* Hide HOD Status column for Admin only */}
-                        {userRole?.toLowerCase() !== 'admin' && (
-                          <td className="px-4 py-3">
-                            <div className="flex flex-col gap-1">
-                              <span
-                                className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
-                                  'bg-green-100 text-green-800': (record.HodStatus || record.hod_status) === 'Approved',
-                                  'bg-yellow-100 text-yellow-800': (record.HodStatus || record.hod_status) === 'Pending',
-                                  'bg-red-100 text-red-800': (record.HodStatus || record.hod_status) === 'Rejected',
-                                })}
-                              >
-                                {record.HodStatus || record.hod_status || 'Pending'}
-                              </span>
-                              {(record.HodApproverName || record.hod_approver_name) && (record.HodStatus || record.hod_status) === 'Approved' && (
-                                <span className="text-xs text-gray-500">by {record.HodApproverName || record.hod_approver_name}</span>
-                              )}
-                            </div>
-                          </td>
-                        )}
+                        {/* Hide HOD Status column for Admin, or for HOD-applied leaves */}
+                        {(() => {
+                          const isAdmin = userRole?.toLowerCase() === 'admin';
+                          const isHodAppliedLeave = (record.EmployeeRole || record.employee_role || '').toLowerCase() === 'hod' && 
+                                                    (record.HodStatus || record.hod_status) === 'Pending' && 
+                                                    !(record.approved_by_hod);
+                          const shouldHideHodStatus = isAdmin || isHodAppliedLeave;
+                          
+                          return !shouldHideHodStatus && (
+                            <td className="px-4 py-3">
+                              <div className="flex flex-col gap-1">
+                                <span
+                                  className={classNames('px-2.5 py-1 rounded-full text-xs font-medium', {
+                                    'bg-green-100 text-green-800': (record.HodStatus || record.hod_status) === 'Approved',
+                                    'bg-yellow-100 text-yellow-800': (record.HodStatus || record.hod_status) === 'Pending',
+                                    'bg-red-100 text-red-800': (record.HodStatus || record.hod_status) === 'Rejected',
+                                  })}
+                                >
+                                  {record.HodStatus || record.hod_status || 'Pending'}
+                                </span>
+                                {(record.HodApproverName || record.hod_approver_name) && (record.HodStatus || record.hod_status) === 'Approved' && (
+                                  <span className="text-xs text-gray-500">by {record.HodApproverName || record.hod_approver_name}</span>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })()}
+                        {/* Show N/A for HOD-applied leaves when HOD status column is hidden */}
+                        {(() => {
+                          const isAdmin = userRole?.toLowerCase() === 'admin';
+                          const isHodAppliedLeave = (record.EmployeeRole || record.employee_role || '').toLowerCase() === 'hod' && 
+                                                    (record.HodStatus || record.hod_status) === 'Pending' && 
+                                                    !(record.approved_by_hod);
+                          const shouldShowNA = !isAdmin && isHodAppliedLeave;
+                          
+                          return shouldShowNA && (
+                            <td className="px-4 py-3 text-sm text-gray-500">N/A</td>
+                          );
+                        })()}
                         <td className="px-4 py-3">
                           <div className="flex flex-col gap-1">
                             <span
@@ -908,5 +908,7 @@ export default function LeaveListTable({
       </div>
     </>
   );
-}
+};
+
+export default LeaveListTable;
 

@@ -32,11 +32,11 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
   const permissions = userPermissions || [];
 
   // Helper function to check permission
-  // Dashboard.view must be strictly permission-based (no admin bypass)
+  // Dashboard.view and Reports.view must be strictly permission-based (no admin bypass)
   // For HOD and Employee, always check permissions (no role bypass)
   const can = (permission: string) => {
-    // Special case: dashboard.view must be strictly permission-based
-    if (permission === PermissionKeys.DASHBOARD_VIEW) {
+    // Special cases: dashboard.view and reports.view must be strictly permission-based
+    if (permission === PermissionKeys.DASHBOARD_VIEW || permission === PermissionKeys.REPORTS_VIEW) {
       return hasPermission(permission, permissions);
     }
     // For HOD and Employee, always check permissions (no role bypass)
@@ -216,13 +216,15 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
       });
     }
 
-    // Reports - Admin always visible
-    menuItems.push({
-      key: 'Reports',
-      label: 'Reports',
-      url: '/dashboard/reports',
-      icon: createIcon(BarChart3, 'w-5 h-5'),
-    });
+    // Reports - Admin visible only if reports.view permission is checked
+    if (can(PermissionKeys.REPORTS_VIEW)) {
+      menuItems.push({
+        key: 'Reports',
+        label: 'Reports',
+        url: '/dashboard/reports',
+        icon: createIcon(BarChart3, 'w-5 h-5'),
+      });
+    }
 
     // Settings is moved to "Additional menu items" section below the line in DashboardLayout
     // Not included in main menu to avoid duplication

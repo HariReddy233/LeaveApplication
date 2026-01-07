@@ -490,20 +490,32 @@ export default function DashboardPage() {
                         <DateFormatter date={leave.createdAt || leave.created_at} />
                       </td>
                       <td className="px-3 py-2 font-medium text-gray-900 text-xs">{leave.NumOfDay || leave.number_of_days || 'N/A'}</td>
-                      {/* Hide HOD Status for Admin */}
-                      {!isAdmin && (
-                        <td className="px-3 py-2">
-                          <span
-                            className={classNames('badge', {
-                              'badge-approved': (leave.HodStatus || leave.hod_status) === 'Approved',
-                              'badge-pending': (leave.HodStatus || leave.hod_status) === 'Pending',
-                              'badge-rejected': (leave.HodStatus || leave.hod_status) === 'Rejected',
-                            })}
-                          >
-                            {leave.HodStatus || leave.hod_status || 'Pending'}
-                          </span>
-                        </td>
-                      )}
+                      {/* Hide HOD Status for Admin, or show N/A for HOD-applied leaves */}
+                      {!isAdmin && (() => {
+                        const isHodAppliedLeave = (leave.EmployeeRole || leave.employee_role || '').toLowerCase() === 'hod' && 
+                                                  (leave.HodStatus || leave.hod_status || 'Pending') === 'Pending' && 
+                                                  !leave.approved_by_hod;
+                        
+                        if (isHodAppliedLeave) {
+                          return (
+                            <td className="px-3 py-2 text-gray-500 text-xs">N/A</td>
+                          );
+                        }
+                        
+                        return (
+                          <td className="px-3 py-2">
+                            <span
+                              className={classNames('badge', {
+                                'badge-approved': (leave.HodStatus || leave.hod_status) === 'Approved',
+                                'badge-pending': (leave.HodStatus || leave.hod_status) === 'Pending',
+                                'badge-rejected': (leave.HodStatus || leave.hod_status) === 'Rejected',
+                              })}
+                            >
+                              {leave.HodStatus || leave.hod_status || 'Pending'}
+                            </span>
+                          </td>
+                        );
+                      })()}
                       <td className="px-3 py-2">
                         <span
                           className={classNames('badge', {

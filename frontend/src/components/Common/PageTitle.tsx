@@ -9,7 +9,7 @@ type BreadcrumbItem = {
 };
 
 type PageTitleProps = {
-  breadCrumbItems?: BreadcrumbItem[];
+  breadCrumbItems: BreadcrumbItem[];
   title: string;
 };
 
@@ -17,12 +17,13 @@ type PageTitleProps = {
  * PageTitle Component - Matches HR Portal
  * Displays breadcrumbs and page title
  */
-export default function PageTitle({ breadCrumbItems = [], title }: PageTitleProps) {
-  // Filter out duplicate "Dashboard" entries from breadCrumbItems
+export default function PageTitle({ breadCrumbItems, title }: PageTitleProps) {
+  // Filter out duplicate Dashboard entries
   const filteredBreadcrumbs = breadCrumbItems.filter((item, index) => {
-    // Remove "Dashboard" if it's the first item (since we always show Dashboard first)
-    if (index === 0 && item.label.toLowerCase() === 'dashboard') {
-      return false;
+    // If first item is Dashboard and path is /dashboard, keep it
+    // Remove any subsequent Dashboard entries
+    if (item.label === 'Dashboard' && item.path === '/dashboard') {
+      return index === 0;
     }
     return true;
   });
@@ -31,12 +32,9 @@ export default function PageTitle({ breadCrumbItems = [], title }: PageTitleProp
     <div className="mb-4">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center space-x-2 text-sm text-gray-600">
-          <Link href="/dashboard" className="hover:text-gray-900">
-            Dashboard
-          </Link>
-          {filteredBreadcrumbs && filteredBreadcrumbs.length > 0 && filteredBreadcrumbs.map((item, index) => (
+          {filteredBreadcrumbs.map((item, index) => (
             <span key={index} className="flex items-center">
-              <span className="mx-2">/</span>
+              {index > 0 && <span className="mx-2">/</span>}
               {item.active ? (
                 <span className="text-gray-900 font-medium">{item.label}</span>
               ) : (

@@ -1,113 +1,89 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
-import { Download, Filter, Search } from 'lucide-react';
+import PageTitle from '@/components/Common/PageTitle';
+import { FileSpreadsheet, Download, Filter, Search } from 'lucide-react';
+import DateFormatter, { formatDate } from '@/utils/DateFormatter';
 import ExportDataJSON from '@/utils/ExportFromJSON';
-
-interface LeaveReport {
-  id: number;
-  employee_name: string;
-  employee_email: string;
-  leave_type: string;
-  leave_type_code?: string;
-  applied_date: string;
-  start_date: string;
-  end_date: string;
-  number_of_days: number;
-  status: string;
-  hod_status?: string;
-  admin_status?: string;
-  approved_by?: string;
-  hod_approver_name?: string;
-  admin_approver_name?: string;
-  reason?: string;
-  team?: string;
-}
+import classNames from 'classnames';
 
 export default function ReportsPage() {
   const router = useRouter();
-  const [reports, setReports] = useState<LeaveReport[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [reports, setReports] = useState<any[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [employees, setEmployees] = useState<any[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [userRole, setUserRole] = useState<string>('');
-  const [permissions, setPermissions] = useState<string[]>([]);
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
 
   // Filters
   const [filters, setFilters] = useState({
-    employee_id: 'all',
-    status: 'all',
-    from_date: '',
-    to_date: '',
-    leave_type: 'all',
+    employeeId: '',
+    status: 'All',
+    startDate: '',
+    endDate: '',
+    leaveType: 'All',
   });
 
   useEffect(() => {
-    checkPermissions();
+    fetchUserRole();
+    fetchLeaveTypes();
   }, []);
 
   useEffect(() => {
     if (userRole) {
       fetchEmployees();
-      fetchLeaveTypes();
+    }
+  }, [userRole]);
+
+  useEffect(() => {
+    if (userRole) {
       fetchReports();
     }
-  }, [userRole, filters]);
+  }, [filters, userRole]);
 
-  const checkPermissions = async () => {
+  const fetchUserRole = async () => {
     try {
       const [userResponse, permissionsResponse] = await Promise.all([
-        api.get('/Auth/Me').catch(() => ({ data: { user: { role: 'employee' } } })),
+        api.get('/Auth/Me'),
         api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
       ]);
-      
-      const role = userResponse.data?.user?.role?.toLowerCase() || 'employee';
-      const userPermissions = permissionsResponse.data?.data || [];
-      
-      // Admin always has access, HOD needs reports.view permission
-      if (role === 'admin') {
-        setUserRole(role);
-        setPermissions(userPermissions);
-      } else if (role === 'hod' || role === 'HOD') {
-        if (userPermissions.includes('reports.view')) {
-          setUserRole(role);
-          setPermissions(userPermissions);
-        } else {
-          router.push('/dashboard');
-          return;
-        }
-      } else {
-        // Employee has no access
-        router.push('/dashboard');
-        return;
+      if (userResponse.data?.user?.role) {
+        setUserRole(userResponse.data.user.role.toLowerCase());
       }
-    } catch (error) {
-      console.error('Failed to check permissions:', error);
-      router.push('/dashboard');
+      if (permissionsResponse.data?.data) {
+        setUserPermissions(permissionsResponse.data.data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch user role:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
   const fetchEmployees = async () => {
     try {
+      // Use same endpoint for both Admin and HOD - same logic as Admin
       const response = await api.get('/User/EmployeeList');
-      setEmployees(response.data?.Data || response.data?.data || []);
-    } catch (err: any) {
+      const employeesData = response.data?.data || response.data?.Data || response.data || [];
+      setEmployees(employeesData);
+    } catch (err) {
       console.error('Failed to fetch employees:', err);
-      if (err.response?.status === 403) {
-        // Permission denied - don't redirect, just log
-        console.warn('No permission to fetch employees list');
-      }
+      setEmployees([]);
     }
   };
 
   const fetchLeaveTypes = async () => {
     try {
       const response = await api.get('/LeaveType/LeaveTypeList');
-      setLeaveTypes(response.data?.Data || response.data?.data || []);
+      const leaveTypesData = response.data?.data || response.data?.Data || response.data || [];
+      setLeaveTypes(leaveTypesData);
     } catch (err) {
       console.error('Failed to fetch leave types:', err);
+      setLeaveTypes([]);
     }
   };
 
@@ -116,34 +92,31 @@ export default function ReportsPage() {
       setLoading(true);
       const params = new URLSearchParams();
       
-      if (filters.employee_id && filters.employee_id !== 'all') {
-        params.append('employee_id', filters.employee_id);
+      if (filters.employeeId && filters.employeeId !== 'All' && filters.employeeId !== '') {
+        params.append('employeeId', filters.employeeId);
       }
-      if (filters.status && filters.status !== 'all') {
+      if (filters.status && filters.status !== 'All') {
         params.append('status', filters.status);
       }
-      if (filters.from_date) {
-        params.append('from_date', filters.from_date);
+      if (filters.startDate) {
+        params.append('startDate', filters.startDate);
       }
-      if (filters.to_date) {
-        params.append('to_date', filters.to_date);
+      if (filters.endDate) {
+        params.append('endDate', filters.endDate);
       }
-      if (filters.leave_type && filters.leave_type !== 'all') {
-        params.append('leave_type', filters.leave_type);
+      if (filters.leaveType && filters.leaveType !== 'All') {
+        params.append('leaveType', filters.leaveType);
       }
 
-      const response = await api.get(`/Leave/Reports?${params.toString()}`);
-      const reportsData = response.data?.data || [];
+      const queryString = params.toString();
+      const url = `/Leave/Reports${queryString ? '?' + queryString : ''}`;
       
-      // Debug: Log first report to verify data structure
-      if (reportsData.length > 0) {
-        console.log('Sample report data:', reportsData[0]);
-        console.log('Applied date:', reportsData[0].applied_date);
-        console.log('Start date:', reportsData[0].start_date);
-        console.log('End date:', reportsData[0].end_date);
-      }
+      const response = await api.get(url);
+      const reportsData = response.data?.Data || response.data?.data || [];
+      const total = response.data?.Total?.[0]?.count || reportsData.length;
       
       setReports(reportsData);
+      setTotalCount(total);
     } catch (err: any) {
       console.error('Failed to fetch reports:', err);
       if (err.response?.status === 401) {
@@ -151,202 +124,256 @@ export default function ReportsPage() {
       } else if (err.response?.status === 403) {
         alert('You do not have permission to view reports');
         router.push('/dashboard');
+      } else {
+        setReports([]);
+        setTotalCount(0);
       }
     } finally {
       setLoading(false);
     }
   };
 
+
   const handleFilterChange = (key: string, value: string) => {
     setFilters(prev => ({ ...prev, [key]: value }));
   };
 
-  const exportToExcel = () => {
+  const resetFilters = () => {
+    setFilters({
+      employeeId: '',
+      status: 'All',
+      startDate: '',
+      endDate: '',
+      leaveType: 'All',
+    });
+  };
+
+  const handleExport = () => {
     if (reports.length === 0) {
       alert('No data to export');
       return;
     }
 
-    // Prepare data for Excel export
-    const excelData = reports.map(report => ({
-      'Leave Type': report.leave_type || '',
-      'Leave Code': report.leave_type_code || '',
-      'Applied Date': report.applied_date ? formatDateDDMMYYYY(report.applied_date) : 'N/A',
-      'From Date': report.start_date ? formatDateDDMMYYYY(report.start_date) : 'N/A',
-      'To Date': report.end_date ? formatDateDDMMYYYY(report.end_date) : 'N/A',
-      'Status': report.status || '',
-      'Approved By': report.approved_by || '',
-      'Reason': report.reason || '',
-      'Employee Name': report.employee_name || '',
-      'Number of Days': report.number_of_days || 0,
-      'Team': report.team === 'US' ? 'US' : (report.team === 'IN' || report.team === 'India' ? 'IN' : report.team || 'N/A'),
+    const exportData = reports.map((report: any) => ({
+      'Employee Name': report.full_name || `${report.Employee?.[0]?.FirstName || ''} ${report.Employee?.[0]?.LastName || ''}`.trim() || report.email,
+      'Email': report.email || report.Employee?.[0]?.Email || '',
+      'Leave Type': report.LeaveType || report.leave_type || '',
+      'Start Date': formatDate(report.start_date || report.startDate || report.StartDate),
+      'End Date': formatDate(report.end_date || report.endDate || report.EndDate),
+      'Number of Days': report.NumOfDay || report.number_of_days || 0,
+      'Status': report.status || 'Pending',
+      'HOD Status': report.HodStatus || report.hod_status || 'Pending',
+      'Admin Status': report.AdminStatus || report.admin_status || 'Pending',
+      'HOD Approver': report.HodApproverName || report.hod_approver_name || 'N/A',
+      'Admin Approver': report.AdminApproverName || report.admin_approver_name || 'N/A',
+      'Reason': report.LeaveDetails || report.reason || '',
+      'Created At': formatDate(report.createdAt || report.created_at),
     }));
 
-    // Generate filename with current date
-    const filename = `Leave_Reports_${new Date().toISOString().split('T')[0]}`;
-
-    // Export using existing utility
-    ExportDataJSON(excelData, filename, 'xls');
+    ExportDataJSON(exportData, 'Leave_Reports', 'xls');
   };
 
-  // Format date as dd-mm-yyyy
-  const formatDateDDMMYYYY = (date: string | Date | null | undefined): string => {
-    if (!date) return 'N/A';
-    
-    try {
-      const d = new Date(date);
-      if (isNaN(d.getTime())) return 'N/A';
-      
-      const day = String(d.getDate()).padStart(2, '0');
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const year = d.getFullYear();
-      
-      return `${day}-${month}-${year}`;
-    } catch (error) {
-      console.error('Date formatting error:', error, date);
-      return 'N/A';
-    }
-  };
+  // Check permission - reports.view must be explicitly checked (no admin bypass)
+  const hasReportsViewPermission = userPermissions.includes('reports.view');
 
-  const getStatusBadge = (status: string) => {
-    const statusLower = status?.toLowerCase() || '';
-    if (statusLower === 'approved') {
-      return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">Approved</span>;
-    } else if (statusLower === 'rejected') {
-      return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">Rejected</span>;
-    } else {
-      return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">Pending</span>;
-    }
-  };
+  // Don't show error while loading permissions
+  if (loading) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-center py-8">
+            <p className="text-gray-600">Loading...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasReportsViewPermission) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="text-center py-8">
+            <p className="text-red-600 text-lg">You do not have permission to view reports.</p>
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              Go to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
-        <p className="text-gray-600 mt-1">View and export leave reports</p>
-      </div>
+    <div className="container mx-auto px-4 py-8">
+      <PageTitle
+        breadCrumbItems={[
+          { label: 'Dashboard', path: '/dashboard' },
+          { label: 'Reports', path: '/dashboard/reports', active: true },
+        ]}
+        title="Leave Reports"
+      />
 
       {/* Filters Section */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <Filter className="w-5 h-5 text-gray-600" />
-          <h2 className="text-lg font-semibold text-gray-900">Filters</h2>
+      <div className="bg-white rounded-lg shadow mb-6 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Filter className="w-5 h-5" />
+            Filters
+          </h2>
+          <button
+            onClick={resetFilters}
+            className="text-sm text-gray-600 hover:text-gray-900 underline"
+          >
+            Reset Filters
+          </button>
         </div>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Employee Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Employee</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Employee
+            </label>
             <select
-              value={filters.employee_id}
-              onChange={(e) => handleFilterChange('employee_id', e.target.value)}
+              value={filters.employeeId}
+              onChange={(e) => handleFilterChange('employeeId', e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="all">All Employees</option>
-              {employees.map((emp) => (
-                <option key={emp.user_id || emp.id} value={emp.user_id || emp.id}>
-                  {emp.full_name || emp.email}
-                </option>
-              ))}
+              <option value="">All Employees</option>
+              {employees.map((emp: any) => {
+                const userId = emp.user_id || emp.id || emp._id;
+                const fullName = emp.full_name || `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || emp.email;
+                return (
+                  <option key={userId} value={userId}>
+                    {fullName}
+                  </option>
+                );
+              })}
             </select>
           </div>
 
           {/* Status Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Status
+            </label>
             <select
               value={filters.status}
               onChange={(e) => handleFilterChange('status', e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="all">All Status</option>
+              <option value="All">All Status</option>
               <option value="Pending">Pending</option>
               <option value="Approved">Approved</option>
               <option value="Rejected">Rejected</option>
             </select>
           </div>
 
-          {/* From Date */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">From Date</label>
-            <input
-              type="date"
-              value={filters.from_date}
-              onChange={(e) => handleFilterChange('from_date', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          {/* To Date */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">To Date</label>
-            <input
-              type="date"
-              value={filters.to_date}
-              onChange={(e) => handleFilterChange('to_date', e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
           {/* Leave Type Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Leave Type</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Leave Type
+            </label>
             <select
-              value={filters.leave_type}
-              onChange={(e) => handleFilterChange('leave_type', e.target.value)}
+              value={filters.leaveType}
+              onChange={(e) => handleFilterChange('leaveType', e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="all">All Types</option>
-              {leaveTypes.map((lt) => (
-                <option key={lt.id} value={lt.name}>
+              <option value="All">All Types</option>
+              {leaveTypes.map((lt: any) => (
+                <option key={lt.id || lt.leave_type_id} value={lt.name}>
                   {lt.name}
                 </option>
               ))}
             </select>
           </div>
-        </div>
 
-        {/* Export Button */}
-        <div className="mt-4 flex justify-end">
-          <button
-            onClick={exportToExcel}
-            disabled={reports.length === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-          >
-            <Download className="w-4 h-4" />
-            Download Excel
-          </button>
+          {/* Start Date Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Start Date
+            </label>
+            <input
+              type="date"
+              value={filters.startDate}
+              onChange={(e) => handleFilterChange('startDate', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          {/* End Date Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              End Date
+            </label>
+            <input
+              type="date"
+              value={filters.endDate}
+              onChange={(e) => handleFilterChange('endDate', e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
         </div>
       </div>
 
-      {/* Reports Table */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+      {/* Reports Table Section */}
+      <div className="bg-white rounded-lg shadow">
+        <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Reports</h2>
+            <p className="text-sm text-gray-600 mt-1">
+              Total: {totalCount} {totalCount === 1 ? 'record' : 'records'}
+            </p>
+          </div>
+          <button
+            onClick={handleExport}
+            disabled={reports.length === 0}
+            className={classNames(
+              "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors",
+              reports.length === 0
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-green-600 text-white hover:bg-green-700"
+            )}
+          >
+            <Download className="w-4 h-4" />
+            Export to Excel
+          </button>
+        </div>
+
         {loading ? (
-          <div className="p-8 text-center text-gray-600">Loading reports...</div>
+          <div className="p-8 text-center">
+            <p className="text-gray-600">Loading reports...</p>
+          </div>
         ) : reports.length === 0 ? (
-          <div className="p-8 text-center text-gray-600">No reports found</div>
+          <div className="p-8 text-center">
+            <p className="text-gray-600">No reports found. Try adjusting your filters.</p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Employee Name
+                    Employee
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Leave Type
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Applied Date
+                    Start Date
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    From Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    To Date
+                    End Date
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Days
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     HOD Status
@@ -355,48 +382,88 @@ export default function ReportsPage() {
                     Admin Status
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Approved By
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Reason
                   </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {reports.map((report) => (
-                  <tr key={report.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {report.employee_name || report.employee_email}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {report.leave_type}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {report.applied_date ? formatDateDDMMYYYY(report.applied_date) : 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {report.start_date ? formatDateDDMMYYYY(report.start_date) : 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {report.end_date ? formatDateDDMMYYYY(report.end_date) : 'N/A'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {report.number_of_days}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {getStatusBadge(report.hod_status || 'Pending')}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {getStatusBadge(report.admin_status || 'Pending')}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {report.approved_by || '-'}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900 max-w-xs truncate" title={report.reason || ''}>
-                      {report.reason || '-'}
-                    </td>
-                  </tr>
-                ))}
+                {reports.map((report: any, index: number) => {
+                  const fullName = report.full_name || `${report.Employee?.[0]?.FirstName || ''} ${report.Employee?.[0]?.LastName || ''}`.trim() || report.email;
+                  const status = report.status || 'Pending';
+                  const hodStatus = report.HodStatus || report.hod_status || 'Pending';
+                  const adminStatus = report.AdminStatus || report.admin_status || 'Pending';
+                  const employeeRole = report.employee_role || report.role;
+
+                  return (
+                    <tr key={report.id || index} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{fullName}</div>
+                        <div className="text-sm text-gray-500">{report.email || report.Employee?.[0]?.Email || ''}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {report.LeaveType || report.leave_type || '-'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {formatDate(report.start_date || report.startDate || report.StartDate)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {formatDate(report.end_date || report.endDate || report.EndDate)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        {report.NumOfDay || report.number_of_days || 0}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={classNames(
+                            'px-2 py-1 text-xs font-semibold rounded-full',
+                            status === 'Approved'
+                              ? 'bg-green-100 text-green-800'
+                              : status === 'Rejected'
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-yellow-100 text-yellow-800'
+                          )}
+                        >
+                          {status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {employeeRole?.toLowerCase() === 'hod' && report.approved_by_hod === null ? (
+                          <span className="text-sm text-gray-500">N/A</span>
+                        ) : (
+                          <span
+                            className={classNames(
+                              'px-2 py-1 text-xs font-semibold rounded-full',
+                              hodStatus === 'Approved'
+                                ? 'bg-green-100 text-green-800'
+                                : hodStatus === 'Rejected'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            )}
+                          >
+                            {hodStatus}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={classNames(
+                            'px-2 py-1 text-xs font-semibold rounded-full',
+                            adminStatus === 'Approved'
+                              ? 'bg-green-100 text-green-800'
+                              : adminStatus === 'Rejected'
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-yellow-100 text-yellow-800'
+                          )}
+                        >
+                          {adminStatus}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-900 max-w-xs truncate" title={report.LeaveDetails || report.reason || ''}>
+                        {report.LeaveDetails || report.reason || '-'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -405,4 +472,3 @@ export default function ReportsPage() {
     </div>
   );
 }
-

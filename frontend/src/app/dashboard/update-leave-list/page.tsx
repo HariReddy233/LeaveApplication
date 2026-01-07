@@ -4,1055 +4,903 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import PageTitle from '@/components/Common/PageTitle';
-import Button from '@/components/Common/Button';
-import { Calendar, X, Plus, Edit2, Trash2, Users, Building2, Lock } from 'lucide-react';
-
-interface OrganizationHoliday {
-  id: number;
-  holiday_name: string;
-  holiday_date: string;
-  is_recurring: boolean;
-  recurring_year: number | null;
-  created_at: string;
-  team?: string; // 'all', 'US', or 'IN'
-  type?: string; // 'organization_holiday' or 'country_holiday'
-}
-
-interface Employee {
-  employee_id: number | string;
-  employee_name?: string;
-  full_name?: string;
-  email: string;
-  user_id?: number;
-}
-
-interface EmployeeBlockedDate {
-  id: number;
-  employee_id: number;
-  blocked_date: string;
-  reason: string | null;
-  blocked_by_name: string | null;
-}
+import { Plus, Trash2, Calendar, Edit, FileText, Users } from 'lucide-react';
 
 export default function UpdateLeaveListPage() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'holidays' | 'employees'>('holidays');
-  const [holidays, setHolidays] = useState<OrganizationHoliday[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [employeeBlockedDates, setEmployeeBlockedDates] = useState<EmployeeBlockedDate[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [holidays, setHolidays] = useState<any[]>([]);
+  const [blockedDates, setBlockedDates] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string>('');
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
-  const [hasAccess, setHasAccess] = useState<boolean>(false);
-
-  // Holiday form state
-  const [showHolidayForm, setShowHolidayForm] = useState(false);
-  const [editingHoliday, setEditingHoliday] = useState<OrganizationHoliday | null>(null);
-  const [holidayForm, setHolidayForm] = useState({
-    holiday_name: '',
-    holiday_date: '',
+  const [activeTab, setActiveTab] = useState<'holidays' | 'blocked'>('holidays');
+  const [holidayFormTab, setHolidayFormTab] = useState<'single' | 'bulk'>('single');
+  const [holidayFormData, setHolidayFormData] = useState({
+    name: '',
+    date: '',
+    country_code: '',
     is_recurring: false,
-    recurring_year: '',
-    team: 'all', // 'all' for organization holiday, 'US' for US team, 'IN' for India team
   });
+  const [bulkHolidays, setBulkHolidays] = useState<Array<{name: string, date: string, country_code: string}>>([
+    { name: '', date: '', country_code: '' }
+  ]);
+  const [creatingHoliday, setCreatingHoliday] = useState(false);
+  const [creatingBulk, setCreatingBulk] = useState(false);
+  const [holidayError, setHolidayError] = useState('');
   
-  // Bulk entry state
-  const [entryMode, setEntryMode] = useState<'single' | 'bulk'>('single');
-  const [bulkHolidays, setBulkHolidays] = useState<Array<{
-    holiday_name: string;
-    holiday_date: string;
-    team: string;
-    description?: string;
-  }>>([{ holiday_name: '', holiday_date: '', team: 'all', description: '' }]);
-
-  // Employee blocked date form state
-  const [showEmployeeForm, setShowEmployeeForm] = useState(false);
-  const [employeeForm, setEmployeeForm] = useState({
+  // Blocked Dates Form State
+  const [blockedFormData, setBlockedFormData] = useState({
     employee_id: '',
-    blocked_dates: [] as string[],
+    dates: [''],
     reason: '',
   });
-  const [selectedDate, setSelectedDate] = useState('');
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [creatingBlocked, setCreatingBlocked] = useState(false);
+  const [blockedError, setBlockedError] = useState('');
+  const [locationFilter, setLocationFilter] = useState<string>('');
 
   useEffect(() => {
-    checkPermissions();
+    fetchUserRole();
+    fetchData(); // Fetch data immediately, don't wait for userRole
+    if (activeTab === 'blocked') {
+      fetchEmployees();
+    }
   }, []);
 
   useEffect(() => {
-    if (hasAccess) {
-      fetchHolidays();
+    fetchData();
+    if (activeTab === 'blocked') {
       fetchEmployees();
-      if (activeTab === 'employees') {
-        fetchEmployeeBlockedDates();
-      }
     }
-  }, [activeTab, hasAccess]);
+  }, [activeTab, locationFilter]);
+  
+  // Also fetch employees when location filter changes (for blocked dates tab)
+  useEffect(() => {
+    if (activeTab === 'blocked') {
+      fetchEmployees();
+    }
+  }, [locationFilter]);
 
-  const checkPermissions = async () => {
+  const fetchUserRole = async () => {
     try {
       const [userResponse, permissionsResponse] = await Promise.all([
         api.get('/Auth/Me'),
         api.get('/Permission/GetMyPermissions').catch(() => ({ data: { data: [] } }))
       ]);
-      
       if (userResponse.data?.user?.role) {
-        const role = userResponse.data.user.role.toLowerCase();
-        setUserRole(role);
-        
-        // Admin always has access
-        // HOD needs leave.update_list permission
-        const permissions = permissionsResponse.data?.data || [];
-        setUserPermissions(permissions);
-        
-        const hasUpdateListPermission = permissions.includes('leave.update_list');
-        const isAdmin = role === 'admin';
-        
-        if (isAdmin || hasUpdateListPermission) {
-          setHasAccess(true);
-        } else {
-          setHasAccess(false);
-          setError('You do not have permission to access Update Leave List. Please contact your administrator.');
-        }
+        setUserRole(userResponse.data.user.role.toLowerCase());
       }
-    } catch (err: any) {
-      console.error('Failed to check permissions:', err);
-      if (err.response?.status === 401) {
-        router.push('/login');
-      } else {
-        setError('Failed to verify permissions. Please try again.');
+      if (permissionsResponse.data?.data) {
+        setUserPermissions(permissionsResponse.data.data);
       }
-    }
-  };
-
-  const fetchHolidays = async () => {
-    try {
-      setLoading(true);
-      const response = await api.get('/Calendar/OrganizationHolidays');
-      if (response.data?.data) {
-        setHolidays(response.data.data);
-      }
-    } catch (err: any) {
-      console.error('Failed to fetch holidays:', err);
-      setError(err.response?.data?.message || 'Failed to fetch holidays');
-    } finally {
-      setLoading(false);
+    } catch (err) {
+      console.error('Failed to fetch user role:', err);
     }
   };
 
   const fetchEmployees = async () => {
     try {
-      const response = await api.get('/User/EmployeeList');
-      // Handle multiple response formats like the employees page does
-      const employeesList = response.data?.data || response.data?.Data || response.data || [];
-      
-      // Map the response to match our interface
-      const mappedEmployees = employeesList.map((emp: any) => ({
-        employee_id: emp.employee_id || emp.user_id || emp.id,
-        employee_name: emp.employee_name || emp.full_name || emp.email,
-        full_name: emp.full_name || emp.employee_name || emp.email,
-        email: emp.email,
-        user_id: emp.user_id || emp.id
-      }));
-      
-      setEmployees(mappedEmployees);
-    } catch (err: any) {
+      // Build query params with location filter
+      const params = new URLSearchParams();
+      if (locationFilter && locationFilter !== 'All') {
+        params.append('location', locationFilter);
+      }
+      const queryString = params.toString();
+      const url = `/User/EmployeeList${queryString ? '?' + queryString : ''}`;
+      const response = await api.get(url).catch(() => ({ data: { data: [] } }));
+      const employeesData = response.data?.data || response.data?.Data || response.data || [];
+      setEmployees(employeesData);
+    } catch (err) {
       console.error('Failed to fetch employees:', err);
       setEmployees([]);
     }
   };
 
-  const fetchEmployeeBlockedDates = async () => {
+  const fetchData = async () => {
     try {
-      const response = await api.get('/Calendar/EmployeeBlockedDates');
-      if (response.data?.data) {
-        setEmployeeBlockedDates(response.data.data);
+      setLoading(true);
+      
+      if (activeTab === 'holidays') {
+        console.log('📅 Fetching organization holidays...');
+        // Build query params with location filter
+        const params = new URLSearchParams();
+        if (locationFilter && locationFilter !== 'All') {
+          params.append('location', locationFilter);
+        }
+        const queryString = params.toString();
+        const url = `/Calendar/OrganizationHolidays${queryString ? '?' + queryString : ''}`;
+        const response = await api.get(url).catch((err) => {
+          console.error('Error fetching holidays:', err);
+          return { data: { data: [] } };
+        });
+        const holidaysData = response.data?.data || response.data || [];
+        console.log(`✅ Fetched ${holidaysData.length} holidays`);
+        setHolidays(holidaysData);
+      } else {
+        console.log('🚫 Fetching blocked dates...');
+        const response = await api.get('/Calendar/AllBlockedDates').catch((err) => {
+          console.error('Error fetching blocked dates:', err);
+          return { data: { data: [] } };
+        });
+        const blockedData = response.data?.data || response.data || [];
+        console.log(`✅ Fetched ${blockedData.length} blocked dates`);
+        setBlockedDates(blockedData);
       }
     } catch (err: any) {
-      console.error('Failed to fetch employee blocked dates:', err);
+      console.error('Failed to fetch data:', err);
+      if (activeTab === 'holidays') {
+        setHolidays([]);
+      } else {
+        setBlockedDates([]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteHoliday = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this holiday?')) {
+      return;
+    }
+
+    try {
+      await api.delete(`/Calendar/OrganizationHoliday/${id}`);
+      alert('Holiday deleted successfully');
+      fetchData();
+    } catch (err: any) {
+      console.error('Failed to delete holiday:', err);
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to delete holiday. Please try again.';
+      alert(errorMsg);
+    }
+  };
+
+  const handleDeleteBlockedDate = async (blocked: any) => {
+    if (!confirm('Are you sure you want to delete this blocked date?')) {
+      return;
+    }
+
+    try {
+      // Check if it's an organization holiday or employee blocked date
+      if (blocked.type === 'organization_holiday') {
+        await api.delete(`/Calendar/OrganizationHoliday/${blocked.id}`);
+      } else {
+        // Employee blocked date
+        await api.delete(`/Calendar/EmployeeBlockedDate/${blocked.id}`);
+      }
+      alert('Blocked date deleted successfully');
+      fetchData();
+    } catch (err: any) {
+      console.error('Failed to delete blocked date:', err);
+      const errorMsg = err.response?.data?.message || err.message || 'Failed to delete blocked date. Please try again.';
+      alert(errorMsg);
     }
   };
 
   const handleCreateHoliday = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
-    setSuccess('');
+    setCreatingHoliday(true);
+    setHolidayError('');
+
+    if (!holidayFormData.name || !holidayFormData.date) {
+      setHolidayError('Holiday name and date are required');
+      setCreatingHoliday(false);
+      return;
+    }
 
     try {
-      setLoading(true);
-      const payload = {
-        holiday_name: holidayForm.holiday_name,
-        holiday_date: holidayForm.holiday_date,
-        is_recurring: holidayForm.is_recurring,
-        recurring_year: holidayForm.recurring_year ? parseInt(holidayForm.recurring_year) : null,
-        team: holidayForm.team, // 'all', 'US', or 'IN'
-      };
-
-      if (editingHoliday) {
-        await api.put(`/Calendar/OrganizationHoliday/${editingHoliday.id}`, payload);
-        setSuccess('Holiday updated successfully');
-      } else {
-        await api.post('/Calendar/OrganizationHoliday', payload);
-        setSuccess('Holiday created successfully');
-      }
-
-      setShowHolidayForm(false);
-      setEditingHoliday(null);
-      setHolidayForm({
-        holiday_name: '',
-        holiday_date: '',
-        is_recurring: false,
-        recurring_year: '',
-        team: 'all',
+      await api.post('/Calendar/OrganizationHoliday', {
+        name: holidayFormData.name,
+        date: holidayFormData.date,
+        country_code: holidayFormData.country_code || null,
+        is_recurring: holidayFormData.is_recurring,
       });
-      fetchHolidays();
+      
+      alert('Holiday created successfully!');
+      // Reset form
+      setHolidayFormData({
+        name: '',
+        date: '',
+        country_code: '',
+        is_recurring: false,
+      });
+      fetchData();
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to save holiday');
+      console.error('Holiday creation error:', err);
+      if (err.response?.status === 401) {
+        setHolidayError('Session expired. Please login again.');
+      } else if (err.response?.status === 403) {
+        setHolidayError(err.response?.data?.message || 'You do not have permission to create holidays.');
+      } else {
+        setHolidayError(err.response?.data?.error || err.response?.data?.message || 'Failed to create holiday');
+      }
     } finally {
-      setLoading(false);
+      setCreatingHoliday(false);
     }
   };
 
-  const handleBulkSave = async () => {
-    setError('');
-    setSuccess('');
+  const handleAddBulkRow = () => {
+    setBulkHolidays([...bulkHolidays, { name: '', date: '', country_code: '' }]);
+  };
+
+  const handleRemoveBulkRow = (index: number) => {
+    if (bulkHolidays.length > 1) {
+      setBulkHolidays(bulkHolidays.filter((_, i) => i !== index));
+    }
+  };
+
+  const handleBulkHolidayChange = (index: number, field: string, value: string) => {
+    const updated = [...bulkHolidays];
+    updated[index] = { ...updated[index], [field]: value };
+    setBulkHolidays(updated);
+  };
+
+  const handleCreateBulkHolidays = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreatingBulk(true);
+    setHolidayError('');
 
     // Filter out empty rows
-    const validHolidays = bulkHolidays.filter(
-      (h) => h.holiday_name.trim() !== '' && h.holiday_date !== ''
-    );
-
+    const validHolidays = bulkHolidays.filter(h => h.name && h.date);
+    
     if (validHolidays.length === 0) {
-      setError('Please add at least one holiday with all required fields');
+      setHolidayError('Please add at least one holiday with name and date');
+      setCreatingBulk(false);
       return;
     }
 
     try {
-      setLoading(true);
-      const response = await api.post('/Calendar/BulkOrganizationHolidays', {
-        holidays: validHolidays.map((h) => ({
-          holiday_name: h.holiday_name.trim(),
-          holiday_date: h.holiday_date,
-          team: h.team,
-          description: h.description?.trim() || null,
-        })),
+      await api.post('/Calendar/BulkOrganizationHolidays', {
+        holidays: validHolidays.map(h => ({
+          name: h.name,
+          date: h.date,
+          country_code: h.country_code || null,
+        }))
       });
-
-      setSuccess(response.data?.message || `Successfully created ${validHolidays.length} holiday(s)`);
-      setShowHolidayForm(false);
-      setBulkHolidays([{ holiday_name: '', holiday_date: '', team: 'all', description: '' }]);
-      setEntryMode('single');
-      fetchHolidays();
-    } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to save bulk holidays');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDeleteHoliday = async (holiday: OrganizationHoliday) => {
-    if (!confirm('Are you sure you want to delete this holiday?')) return;
-
-    try {
-      setLoading(true);
-      // If it's a country-specific holiday, use different endpoint
-      if (holiday.type === 'country_holiday' || (holiday.team && holiday.team !== 'all')) {
-        await api.delete(`/Calendar/CountryHoliday/${holiday.id}?country_code=${holiday.team}`);
-      } else {
-        await api.delete(`/Calendar/OrganizationHoliday/${holiday.id}`);
-      }
-      setSuccess('Holiday deleted successfully');
-      fetchHolidays();
-    } catch (err: any) {
-      console.error('Failed to delete holiday:', err);
       
-      // Handle different error types correctly
+      alert(`${validHolidays.length} holiday(s) created successfully!`);
+      // Reset form
+      setBulkHolidays([{ name: '', date: '', country_code: '' }]);
+      setHolidayError('');
+      fetchData();
+    } catch (err: any) {
+      console.error('Bulk holiday creation error:', err);
       if (err.response?.status === 401) {
-        // 401 = Authentication failed - redirect to login
-        setError('Session expired. Please login again.');
-        setTimeout(() => {
-          if (typeof window !== 'undefined') {
-            localStorage.removeItem('auth_token');
-            window.location.href = '/login';
-          }
-        }, 2000);
+        setHolidayError('Session expired. Please login again.');
       } else if (err.response?.status === 403) {
-        // 403 = Permission denied - show error but don't redirect
-        const errorMsg = err.response?.data?.message || 'You do not have permission to delete holidays. Please contact your administrator.';
-        setError(`Access denied: ${errorMsg}`);
+        setHolidayError(err.response?.data?.message || 'You do not have permission to create holidays.');
       } else {
-        // Other errors
-        setError(err.response?.data?.message || 'Failed to delete holiday');
+        setHolidayError(err.response?.data?.error || err.response?.data?.message || 'Failed to create holidays');
       }
     } finally {
-      setLoading(false);
+      setCreatingBulk(false);
     }
   };
 
-  const handleEditHoliday = (holiday: OrganizationHoliday) => {
-    setEditingHoliday(holiday);
-    setEntryMode('single'); // Always use single mode for editing
-    // Fix date shift bug: Extract date part only (YYYY-MM-DD) to avoid timezone conversion
-    const dateStr = holiday.holiday_date.split('T')[0];
-    setHolidayForm({
-      holiday_name: holiday.holiday_name,
-      holiday_date: dateStr,
-      is_recurring: holiday.is_recurring,
-      recurring_year: holiday.recurring_year?.toString() || '',
-      team: holiday.team || 'all',
-    });
-    setShowHolidayForm(true);
+  const handleAddBlockedDate = () => {
+    setBlockedFormData({ ...blockedFormData, dates: [...blockedFormData.dates, ''] });
   };
 
-  const handleBlockEmployeeDates = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
+  const handleRemoveBlockedDate = (index: number) => {
+    if (blockedFormData.dates.length > 1) {
+      setBlockedFormData({ ...blockedFormData, dates: blockedFormData.dates.filter((_, i) => i !== index) });
+    }
+  };
 
-    if (!employeeForm.employee_id || employeeForm.blocked_dates.length === 0) {
-      setError('Please select an employee and at least one date');
+  const handleBlockedDateChange = (index: number, value: string) => {
+    const updated = [...blockedFormData.dates];
+    updated[index] = value;
+    setBlockedFormData({ ...blockedFormData, dates: updated });
+  };
+
+  const handleCreateBlockedDates = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreatingBlocked(true);
+    setBlockedError('');
+
+    if (!blockedFormData.employee_id) {
+      setBlockedError('Please select an employee');
+      setCreatingBlocked(false);
+      return;
+    }
+
+    // Filter out empty dates
+    const validDates = blockedFormData.dates.filter(d => d);
+    
+    if (validDates.length === 0) {
+      setBlockedError('Please add at least one date');
+      setCreatingBlocked(false);
       return;
     }
 
     try {
-      setLoading(true);
-      await api.post('/Calendar/BlockEmployeeDates', {
-        employee_id: parseInt(employeeForm.employee_id),
-        blocked_dates: employeeForm.blocked_dates,
-        reason: employeeForm.reason || null,
-      });
+      // Get employee_id from selected employee
+      const selectedEmployee = employees.find(emp => 
+        (emp.employee_id || emp.user_id || emp.id)?.toString() === blockedFormData.employee_id
+      );
+      
+      if (!selectedEmployee) {
+        setBlockedError('Selected employee not found');
+        setCreatingBlocked(false);
+        return;
+      }
 
-      setSuccess('Employee dates blocked successfully');
-      setShowEmployeeForm(false);
-      setEmployeeForm({
+      const employeeId = selectedEmployee.employee_id || selectedEmployee.user_id || selectedEmployee.id;
+
+      await api.post('/Calendar/BlockEmployeeDates', {
+        employee_id: employeeId,
+        blocked_dates: validDates,
+        reason: blockedFormData.reason || null,
+      });
+      
+      alert(`${validDates.length} date(s) blocked successfully!`);
+      // Reset form
+      setBlockedFormData({
         employee_id: '',
-        blocked_dates: [],
+        dates: [''],
         reason: '',
       });
-      setSelectedDate('');
-      fetchEmployeeBlockedDates();
+      setBlockedError('');
+      fetchData();
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to block employee dates');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const addDateToBlock = () => {
-    if (selectedDate && !employeeForm.blocked_dates.includes(selectedDate)) {
-      setEmployeeForm({
-        ...employeeForm,
-        blocked_dates: [...employeeForm.blocked_dates, selectedDate],
-      });
-      setSelectedDate('');
-    }
-  };
-
-  const removeDateFromBlock = (date: string) => {
-    setEmployeeForm({
-      ...employeeForm,
-      blocked_dates: employeeForm.blocked_dates.filter(d => d !== date),
-    });
-  };
-
-  const handleDeleteEmployeeBlockedDate = async (id: number) => {
-    if (!confirm('Are you sure you want to remove this blocked date?')) return;
-
-    try {
-      setLoading(true);
-      await api.delete(`/Calendar/EmployeeBlockedDate/${id}`);
-      setSuccess('Blocked date removed successfully');
-      fetchEmployeeBlockedDates();
-    } catch (err: any) {
-      console.error('Failed to delete employee blocked date:', err);
-      
-      // Handle different error types correctly
+      console.error('Block date creation error:', err);
       if (err.response?.status === 401) {
-        // 401 = Authentication failed - redirect to login
-        setError('Session expired. Please login again.');
-        setTimeout(() => {
-          if (typeof window !== 'undefined') {
-            localStorage.removeItem('auth_token');
-            window.location.href = '/login';
-          }
-        }, 2000);
+        setBlockedError('Session expired. Please login again.');
       } else if (err.response?.status === 403) {
-        // 403 = Permission denied - show error but don't redirect
-        const errorMsg = err.response?.data?.message || 'You do not have permission to delete blocked dates. Please contact your administrator.';
-        setError(`Access denied: ${errorMsg}`);
+        setBlockedError(err.response?.data?.message || 'You do not have permission to block dates.');
       } else {
-        // Other errors
-        setError(err.response?.data?.message || 'Failed to remove blocked date');
+        setBlockedError(err.response?.data?.error || err.response?.data?.message || 'Failed to block dates');
       }
     } finally {
-      setLoading(false);
+      setCreatingBlocked(false);
     }
   };
 
-  const getEmployeeName = (employeeId: number) => {
-    const employee = employees.find(e => 
-      (e.employee_id && e.employee_id.toString() === employeeId.toString()) || 
-      (e.user_id && e.user_id.toString() === employeeId.toString())
-    );
-    return employee?.employee_name || employee?.full_name || employee?.email || `Employee #${employeeId}`;
-  };
 
-  if (!hasAccess && userRole) {
+  // Show loading only on initial load
+  const isInitialLoad = loading && holidays.length === 0 && blockedDates.length === 0;
+
+  if (isInitialLoad) {
     return (
-      <div className="space-y-6">
-        <PageTitle title="Organization Holidays" description="Manage organization holidays" />
-        <div className="card">
-          <div className="p-6 text-center">
-            <Lock className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">Access Denied</h3>
-            <p className="text-gray-600">You do not have permission to access Organization Holidays. Please contact your administrator.</p>
-          </div>
+      <div className="page-container">
+        <PageTitle
+          title="Update Leave List"
+          breadCrumbItems={[{ label: 'Dashboard', path: '/dashboard' }, { label: 'Update Leave List', path: '/dashboard/update-leave-list' }]}
+        />
+        <div className="flex items-center justify-center h-64">
+          <div className="text-gray-500">Loading...</div>
         </div>
-      </div>
-    );
-  }
-
-  if (!hasAccess) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading...</div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <PageTitle title="Organization Holidays" description="Manage organization holidays and employee blocked dates" />
+    <div className="page-container">
+      <PageTitle
+        title="Update Leave List"
+        breadCrumbItems={[{ label: 'Dashboard', path: '/dashboard' }, { label: 'Update Leave List', path: '/dashboard/update-leave-list' }]}
+      />
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-          {error}
+      {/* Tabs and Location Filter */}
+      <div className="card mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex border-b border-gray-200 flex-1">
+            <button
+              onClick={() => setActiveTab('holidays')}
+              className={`px-6 py-3 font-medium text-sm transition-colors ${
+                activeTab === 'holidays'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Calendar className="w-4 h-4 inline mr-2" />
+              Organization Holidays
+            </button>
+            <button
+              onClick={() => setActiveTab('blocked')}
+              className={`px-6 py-3 font-medium text-sm transition-colors ${
+                activeTab === 'blocked'
+                  ? 'text-blue-600 border-b-2 border-blue-600'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Calendar className="w-4 h-4 inline mr-2" />
+              Blocked Dates
+            </button>
+          </div>
+          <div className="ml-4">
+            <label htmlFor="location-filter-update" className="form-label text-sm mb-2 mr-2">
+              Filter by Location:
+            </label>
+            <select
+              id="location-filter-update"
+              value={locationFilter}
+              onChange={(e) => setLocationFilter(e.target.value)}
+              className="form-input w-auto min-w-[120px]"
+            >
+              <option value="">All</option>
+              <option value="IN">IN</option>
+              <option value="US">US</option>
+            </select>
+          </div>
         </div>
-      )}
-
-      {success && (
-        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
-          {success}
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
-          <button
-            onClick={() => setActiveTab('holidays')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'holidays'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            <Building2 className="inline w-4 h-4 mr-2" />
-            Organization Holidays
-          </button>
-          <button
-            onClick={() => setActiveTab('employees')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'employees'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-          >
-            <Users className="inline w-4 h-4 mr-2" />
-            Employee Blocked Dates
-          </button>
-        </nav>
       </div>
 
-      {/* Organization Holidays Tab */}
-      {activeTab === 'holidays' && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">Organization Holidays</h2>
-            {(userRole === 'admin' || userPermissions.includes('leave.update_list')) && (
-              <Button
-                onClick={() => {
-                  setEditingHoliday(null);
-                  setEntryMode('single');
-                  setHolidayForm({
-                    holiday_name: '',
-                    holiday_date: '',
-                    is_recurring: false,
-                    recurring_year: '',
-                    team: 'all',
-                  });
-                  setBulkHolidays([{ holiday_name: '', holiday_date: '', team: 'all', description: '' }]);
-                  setShowHolidayForm(true);
-                }}
-                className="flex items-center gap-2"
+      {/* Content */}
+      {activeTab === 'holidays' ? (
+        <>
+          {/* Add New Holiday Form Card */}
+          <div className="card mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Organization Holidays</h2>
+              <button
+                onClick={() => router.push('/dashboard/update-leave-list/holidays/create')}
+                className="btn-primary flex items-center gap-2"
               >
                 <Plus className="w-4 h-4" />
                 Add Holiday
-              </Button>
-            )}
-          </div>
+              </button>
+            </div>
 
-          {/* Holiday Form */}
-          {showHolidayForm && (
-            <div className="bg-white p-6 rounded-lg shadow border">
-              <h3 className="text-lg font-semibold mb-4">
-                {editingHoliday ? 'Edit Holiday' : 'Add New Holiday'}
-              </h3>
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <h3 className="text-md font-semibold text-gray-900 mb-4">Add New Holiday</h3>
               
-              {/* Entry Mode Tabs - Only show when not editing */}
-              {!editingHoliday && (
-                <div className="border-b border-gray-200 mb-4">
-                  <nav className="-mb-px flex space-x-8">
-                    <button
-                      type="button"
-                      onClick={() => setEntryMode('single')}
-                      className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                        entryMode === 'single'
-                          ? 'border-blue-500 text-blue-600'
-                          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                      }`}
-                    >
-                      Single Holiday
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEntryMode('bulk')}
-                      className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                        entryMode === 'bulk'
-                          ? 'border-blue-500 text-blue-600'
-                          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                      }`}
-                    >
-                      Bulk Holiday Entry
-                    </button>
-                  </nav>
-                </div>
-              )}
-              
-              {/* Single Holiday Form */}
-              {entryMode === 'single' && (
+              {/* Form Tabs */}
+              <div className="flex border-b border-gray-200 mb-6">
+                <button
+                  onClick={() => setHolidayFormTab('single')}
+                  className={`px-4 py-2 font-medium text-sm transition-colors flex items-center gap-2 ${
+                    holidayFormTab === 'single'
+                      ? 'text-blue-600 border-b-2 border-blue-600'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <FileText className="w-4 h-4" />
+                  Single Holiday
+                </button>
+                <button
+                  onClick={() => setHolidayFormTab('bulk')}
+                  className={`px-4 py-2 font-medium text-sm transition-colors flex items-center gap-2 ${
+                    holidayFormTab === 'bulk'
+                      ? 'text-blue-600 border-b-2 border-blue-600'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Users className="w-4 h-4" />
+                  Bulk Holiday Entry
+                </button>
+              </div>
+
+              {holidayFormTab === 'single' ? (
                 <form onSubmit={handleCreateHoliday} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Holiday Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={holidayForm.holiday_name}
-                    onChange={(e) => setHolidayForm({ ...holidayForm, holiday_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="e.g., New Year, Christmas"
-                  />
-                </div>
+                  {holidayError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                      {holidayError}
+                    </div>
+                  )}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Holiday Date *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={holidayForm.holiday_date}
-                    onChange={(e) => setHolidayForm({ ...holidayForm, holiday_date: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Holiday Name */}
+                    <div>
+                      <label htmlFor="holiday-name" className="block text-sm font-medium text-gray-700 mb-2">
+                        Holiday Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        id="holiday-name"
+                        type="text"
+                        value={holidayFormData.name}
+                        onChange={(e) => setHolidayFormData({ ...holidayFormData, name: e.target.value })}
+                        required
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                        placeholder="e.g., New Year, Christmas"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Team/Country *
-                  </label>
-                  <select
-                    required
-                    value={holidayForm.team}
-                    onChange={(e) => setHolidayForm({ ...holidayForm, team: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="all">All Teams (Organization Holiday)</option>
-                    <option value="US">US Team</option>
-                    <option value="IN">India Team</option>
-                  </select>
-                  <p className="mt-1 text-xs text-gray-500">
-                    Select which team(s) this holiday applies to
-                  </p>
-                </div>
+                    {/* Holiday Date */}
+                    <div>
+                      <label htmlFor="holiday-date" className="block text-sm font-medium text-gray-700 mb-2">
+                        Holiday Date <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          id="holiday-date"
+                          type="date"
+                          value={holidayFormData.date}
+                          onChange={(e) => setHolidayFormData({ ...holidayFormData, date: e.target.value })}
+                          required
+                          className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                          placeholder="dd-mm-yyyy"
+                        />
+                        <Calendar className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                      </div>
+                    </div>
 
-                <div className="flex items-center">
-                  <input
-                    type="checkbox"
-                    id="is_recurring"
-                    checked={holidayForm.is_recurring}
-                    onChange={(e) => setHolidayForm({ ...holidayForm, is_recurring: e.target.checked })}
-                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                  />
-                  <label htmlFor="is_recurring" className="ml-2 block text-sm text-gray-700">
-                    Recurring Holiday (every year)
-                  </label>
-                </div>
+                    {/* Team/Country */}
+                    <div>
+                      <label htmlFor="holiday-country" className="block text-sm font-medium text-gray-700 mb-2">
+                        Team/Country <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        id="holiday-country"
+                        value={holidayFormData.country_code || ''}
+                        onChange={(e) => setHolidayFormData({ ...holidayFormData, country_code: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                      >
+                        <option value="">All Teams (Organization Holiday)</option>
+                        <option value="IN">IN (India)</option>
+                        <option value="US">US (United States)</option>
+                      </select>
+                      <p className="mt-1 text-xs text-gray-500">Select which team(s) this holiday applies to</p>
+                    </div>
 
-                <div className="flex gap-2">
-                  <Button type="submit" disabled={loading}>
-                    {editingHoliday ? 'Update' : 'Create'} Holiday
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      setShowHolidayForm(false);
-                      setEditingHoliday(null);
-                    }}
-                    variant="outline"
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </form>
-              )}
-              
-              {/* Bulk Holiday Entry Form */}
-              {entryMode === 'bulk' && (
-                <div className="space-y-4">
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200 border border-gray-300">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
-                            Date *
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
-                            Holiday Name *
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-r border-gray-300">
-                            Country / Team *
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Description
-                          </th>
-                          <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Actions
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {bulkHolidays.map((holiday, index) => (
-                          <tr key={index} className="hover:bg-gray-50">
-                            <td className="px-4 py-2 border-r border-gray-300">
-                              <input
-                                type="date"
-                                required
-                                value={holiday.holiday_date}
-                                onChange={(e) => {
-                                  const updated = [...bulkHolidays];
-                                  updated[index].holiday_date = e.target.value;
-                                  setBulkHolidays(updated);
-                                }}
-                                className="w-full px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                              />
-                            </td>
-                            <td className="px-4 py-2 border-r border-gray-300">
-                              <input
-                                type="text"
-                                required
-                                value={holiday.holiday_name}
-                                onChange={(e) => {
-                                  const updated = [...bulkHolidays];
-                                  updated[index].holiday_name = e.target.value;
-                                  setBulkHolidays(updated);
-                                }}
-                                className="w-full px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                                placeholder="e.g., New Year"
-                              />
-                            </td>
-                            <td className="px-4 py-2 border-r border-gray-300">
-                              <select
-                                required
-                                value={holiday.team}
-                                onChange={(e) => {
-                                  const updated = [...bulkHolidays];
-                                  updated[index].team = e.target.value;
-                                  setBulkHolidays(updated);
-                                }}
-                                className="w-full px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                              >
-                                <option value="all">All Teams</option>
-                                <option value="US">US Team</option>
-                                <option value="IN">India Team</option>
-                              </select>
-                            </td>
-                            <td className="px-4 py-2">
-                              <input
-                                type="text"
-                                value={holiday.description || ''}
-                                onChange={(e) => {
-                                  const updated = [...bulkHolidays];
-                                  updated[index].description = e.target.value;
-                                  setBulkHolidays(updated);
-                                }}
-                                className="w-full px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                                placeholder="Optional"
-                              />
-                            </td>
-                            <td className="px-4 py-2 text-center">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (bulkHolidays.length > 1) {
-                                    setBulkHolidays(bulkHolidays.filter((_, i) => i !== index));
-                                  }
-                                }}
-                                className="text-red-600 hover:text-red-900 disabled:text-gray-400 disabled:cursor-not-allowed"
-                                disabled={bulkHolidays.length === 1}
-                                title="Remove row"
-                              >
-                                <X className="w-4 h-4 inline" />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    {/* Recurring Holiday */}
+                    <div className="flex items-center pt-8">
+                      <input
+                        id="holiday-recurring"
+                        type="checkbox"
+                        checked={holidayFormData.is_recurring}
+                        onChange={(e) => setHolidayFormData({ ...holidayFormData, is_recurring: e.target.checked })}
+                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                      />
+                      <label htmlFor="holiday-recurring" className="ml-2 text-sm text-gray-700">
+                        Recurring Holiday (every year)
+                      </label>
+                    </div>
                   </div>
-                  
-                  <div className="flex justify-between items-center">
-                    <Button
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-end gap-4 pt-4 border-t border-gray-200">
+                    <button
                       type="button"
                       onClick={() => {
-                        setBulkHolidays([...bulkHolidays, { holiday_name: '', holiday_date: '', team: 'all', description: '' }]);
+                        setHolidayFormData({ name: '', date: '', country_code: '', is_recurring: false });
+                        setHolidayError('');
                       }}
-                      variant="outline"
-                      className="flex items-center gap-2"
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                     >
-                      <Plus className="w-4 h-4" />
-                      Add Row
-                    </Button>
-                    
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        onClick={handleBulkSave}
-                        disabled={loading}
-                      >
-                        Save All Holidays
-                      </Button>
-                      <Button
-                        type="button"
-                        onClick={() => {
-                          setShowHolidayForm(false);
-                          setEditingHoliday(null);
-                          setBulkHolidays([{ holiday_name: '', holiday_date: '', team: 'all', description: '' }]);
-                        }}
-                        variant="outline"
-                      >
-                        Cancel
-                      </Button>
-                    </div>
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={creatingHoliday}
+                      className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {creatingHoliday ? 'Creating...' : 'Create Holiday'}
+                    </button>
                   </div>
-                </div>
+                </form>
+              ) : (
+                <form onSubmit={handleCreateBulkHolidays} className="space-y-4">
+                  {holidayError && (
+                    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                      {holidayError}
+                    </div>
+                  )}
+
+                  <div className="space-y-4">
+                    {bulkHolidays.map((holiday, index) => (
+                      <div key={index} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end border-b border-gray-200 pb-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Holiday Name <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={holiday.name}
+                            onChange={(e) => handleBulkHolidayChange(index, 'name', e.target.value)}
+                            required
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                            placeholder="e.g., New Year"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Holiday Date <span className="text-red-500">*</span>
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="date"
+                              value={holiday.date}
+                              onChange={(e) => handleBulkHolidayChange(index, 'date', e.target.value)}
+                              required
+                              className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                            />
+                            <Calendar className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Team/Country
+                          </label>
+                          <select
+                            value={holiday.country_code || ''}
+                            onChange={(e) => handleBulkHolidayChange(index, 'country_code', e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                          >
+                            <option value="">All Teams</option>
+                            <option value="IN">IN (India)</option>
+                            <option value="US">US (United States)</option>
+                          </select>
+                        </div>
+                        <div className="flex gap-2">
+                          {bulkHolidays.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBulkRow(index)}
+                              className="px-3 py-2 text-sm text-red-600 hover:text-red-800 border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
+                            >
+                              Remove
+                            </button>
+                          )}
+                          {index === bulkHolidays.length - 1 && (
+                            <button
+                              type="button"
+                              onClick={handleAddBulkRow}
+                              className="px-3 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-300 rounded-lg hover:bg-blue-50 transition-colors"
+                            >
+                              Add Row
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-end gap-4 pt-4 border-t border-gray-200">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkHolidays([{ name: '', date: '', country_code: '' }]);
+                        setHolidayError('');
+                      }}
+                      className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={creatingBulk}
+                      className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {creatingBulk ? 'Creating...' : 'Create Holidays'}
+                    </button>
+                  </div>
+                </form>
               )}
             </div>
-          )}
+          </div>
 
-          {/* Holidays List */}
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Holiday Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Country / Team
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  {(userRole === 'admin' || userPermissions.includes('leave.update_list')) && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {holidays.length === 0 ? (
-                  <tr>
-                    <td colSpan={userRole === 'admin' || userPermissions.includes('calendar.block_dates') ? 5 : 4} className="px-6 py-4 text-center text-gray-500">
-                      No holidays found. {(userRole === 'admin' || userPermissions.includes('calendar.block_dates')) && 'Add your first holiday above.'}
-                    </td>
-                  </tr>
-                ) : (
-                  holidays.map((holiday) => (
-                    <tr key={holiday.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {(() => {
-                          // Fix date shift bug: Parse date as YYYY-MM-DD without timezone conversion
-                          const dateStr = holiday.holiday_date.split('T')[0]; // Get date part only
-                          const [year, month, day] = dateStr.split('-');
-                          return new Date(parseInt(year), parseInt(month) - 1, parseInt(day)).toLocaleDateString('en-US', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                          });
-                        })()}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-900">
-                        {holiday.holiday_name}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {holiday.team === 'all' ? (
-                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-purple-100 text-purple-800">
-                            All Teams
-                          </span>
-                        ) : holiday.team === 'US' ? (
-                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
-                            United States
-                          </span>
-                        ) : holiday.team === 'IN' ? (
-                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-orange-100 text-orange-800">
-                            India
-                          </span>
-                        ) : (
-                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">
-                            All Teams
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {holiday.is_recurring ? (
-                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
-                            Active (Recurring)
-                          </span>
-                        ) : (
-                          <span className="px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
-                            Active
-                          </span>
-                        )}
-                      </td>
-                      {(userRole === 'admin' || userPermissions.includes('leave.update_list')) && (
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <div className="flex items-center gap-3">
-                            {holiday.type !== 'country_holiday' && (
+          {/* Holidays Table */}
+          <div className="card">
+            {holidays.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                No organization holidays found.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="text-left py-3 px-4 font-semibold text-gray-700 uppercase text-xs">Date</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-700 uppercase text-xs">Holiday Name</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-700 uppercase text-xs">Country / Team</th>
+                      <th className="text-left py-3 px-4 font-semibold text-gray-700 uppercase text-xs">Status</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700 uppercase text-xs">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {holidays.map((holiday) => {
+                      const countryCode = holiday.country_code || '';
+                      const countryName = countryCode === 'IN' ? 'India' : countryCode === 'US' ? 'United States' : 'All';
+                      const countryBadgeColor = countryCode === 'IN' ? 'bg-orange-100 text-orange-800' : countryCode === 'US' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800';
+                      
+                      return (
+                        <tr key={holiday.id} className="border-b border-gray-100 hover:bg-gray-50">
+                          <td className="py-3 px-4">
+                            {holiday.date ? new Date(holiday.date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : 'N/A'}
+                          </td>
+                          <td className="py-3 px-4">{holiday.name || 'N/A'}</td>
+                          <td className="py-3 px-4">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${countryBadgeColor}`}>
+                              {countryName}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className="badge badge-approved">Active</span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-2">
                               <button
-                                onClick={() => handleEditHoliday(holiday)}
-                                className="text-blue-600 hover:text-blue-900 transition-colors"
+                                onClick={() => router.push(`/dashboard/update-leave-list/holidays/edit/${holiday.id}`)}
+                                className="text-blue-600 hover:text-blue-800 p-2"
                                 title="Edit holiday"
                               >
-                                <Edit2 className="w-4 h-4" />
+                                <Edit className="w-4 h-4" />
                               </button>
-                            )}
-                            <button
-                              onClick={() => handleDeleteHoliday(holiday)}
-                              className="text-red-600 hover:text-red-900 transition-colors"
-                              title="Delete holiday"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                              <button
+                                onClick={() => handleDeleteHoliday(holiday.id)}
+                                className="text-red-600 hover:text-red-800 p-2"
+                                title="Delete holiday"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        </>
+      ) : (
+        <>
+          {/* Add Blocked Date Form Card */}
+          <div className="card mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">Blocked Dates</h2>
+            </div>
 
-      {/* Employee Blocked Dates Tab */}
-      {activeTab === 'employees' && (
-        <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-semibold">Employee Blocked Dates</h2>
-            <Button
-              onClick={() => {
-                setEmployeeForm({
-                  employee_id: '',
-                  blocked_dates: [],
-                  reason: '',
-                });
-                setShowEmployeeForm(true);
-              }}
-              className="flex items-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              Block Employee Dates
-            </Button>
-          </div>
-
-          {/* Employee Blocked Date Form */}
-          {showEmployeeForm && (
-            <div className="bg-white p-6 rounded-lg shadow border">
-              <h3 className="text-lg font-semibold mb-4">Block Employee Dates</h3>
-              <form onSubmit={handleBlockEmployeeDates} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Employee *
-                  </label>
-                  <select
-                    required
-                    value={employeeForm.employee_id}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, employee_id: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Select an employee</option>
-                    {employees.map((emp) => (
-                      <option key={emp.employee_id || emp.user_id} value={emp.employee_id || emp.user_id}>
-                        {emp.employee_name || emp.full_name || emp.email}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Block Date
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="date"
-                      value={selectedDate}
-                      onChange={(e) => setSelectedDate(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <Button
-                      type="button"
-                      onClick={addDateToBlock}
-                      disabled={!selectedDate}
-                    >
-                      Add Date
-                    </Button>
+            <div className="border-t border-gray-200 pt-6 mt-6">
+              <form onSubmit={handleCreateBlockedDates} className="space-y-4">
+                {blockedError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                    {blockedError}
                   </div>
-                </div>
+                )}
 
-                {employeeForm.blocked_dates.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Employee Selection */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Selected Dates
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Employee <span className="text-red-500">*</span>
                     </label>
-                    <div className="flex flex-wrap gap-2">
-                      {employeeForm.blocked_dates.map((date) => (
-                        <span
-                          key={date}
-                          className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-blue-100 text-blue-800"
-                        >
-                          {new Date(date).toLocaleDateString('en-US', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                          })}
-                          <button
-                            type="button"
-                            onClick={() => removeDateFromBlock(date)}
-                            className="ml-2 text-blue-600 hover:text-blue-800"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </span>
+                    <select
+                      value={blockedFormData.employee_id}
+                      onChange={(e) => setBlockedFormData({ ...blockedFormData, employee_id: e.target.value })}
+                      required
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                    >
+                      <option value="">Select Employee</option>
+                      {employees.map((emp) => (
+                        <option key={emp.employee_id || emp.user_id || emp.id} value={(emp.employee_id || emp.user_id || emp.id)?.toString()}>
+                          {emp.full_name || emp.name || 'Unknown'} ({emp.email || 'No email'})
+                        </option>
                       ))}
-                    </div>
+                    </select>
                   </div>
-                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Reason (optional)
-                  </label>
-                  <textarea
-                    value={employeeForm.reason}
-                    onChange={(e) => setEmployeeForm({ ...employeeForm, reason: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    rows={3}
-                    placeholder="Reason for blocking these dates..."
-                  />
+                  {/* Reason */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Reason
+                    </label>
+                    <input
+                      type="text"
+                      value={blockedFormData.reason}
+                      onChange={(e) => setBlockedFormData({ ...blockedFormData, reason: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                      placeholder="e.g., Training, Conference"
+                    />
+                  </div>
                 </div>
 
-                <div className="flex gap-2">
-                  <Button type="submit" disabled={loading || employeeForm.blocked_dates.length === 0}>
-                    Block Dates
-                  </Button>
-                  <Button
+                {/* Blocked Dates List */}
+                <div className="space-y-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Blocked Dates <span className="text-red-500">*</span>
+                  </label>
+                  {blockedFormData.dates.map((date, index) => (
+                    <div key={index} className="flex gap-2 items-end">
+                      <div className="flex-1">
+                        <div className="relative">
+                          <input
+                            type="date"
+                            value={date}
+                            onChange={(e) => handleBlockedDateChange(index, e.target.value)}
+                            required={index === 0}
+                            className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                          />
+                          <Calendar className="absolute right-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                        </div>
+                      </div>
+                      {blockedFormData.dates.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveBlockedDate(index)}
+                          className="px-3 py-2 text-sm text-red-600 hover:text-red-800 border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
+                        >
+                          Remove
+                        </button>
+                      )}
+                      {index === blockedFormData.dates.length - 1 && (
+                        <button
+                          type="button"
+                          onClick={handleAddBlockedDate}
+                          className="px-3 py-2 text-sm text-blue-600 hover:text-blue-800 border border-blue-300 rounded-lg hover:bg-blue-50 transition-colors"
+                        >
+                          Add Date
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center justify-end gap-4 pt-4 border-t border-gray-200">
+                  <button
                     type="button"
                     onClick={() => {
-                      setShowEmployeeForm(false);
-                      setEmployeeForm({
-                        employee_id: '',
-                        blocked_dates: [],
-                        reason: '',
-                      });
+                      setBlockedFormData({ employee_id: '', dates: [''], reason: '' });
+                      setBlockedError('');
                     }}
-                    variant="outline"
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                   >
                     Cancel
-                  </Button>
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={creatingBlocked}
+                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {creatingBlocked ? 'Blocking...' : 'Block Dates'}
+                  </button>
                 </div>
               </form>
             </div>
-          )}
+          </div>
 
-          {/* Employee Blocked Dates List */}
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Employee
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Blocked Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Reason
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {employeeBlockedDates.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-6 py-4 text-center text-gray-500">
-                      No employee blocked dates found.
-                    </td>
+          {/* Blocked Dates Table */}
+          <div className="card">
+            {blockedDates.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              No blocked dates found.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Date</th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Employee</th>
+                    <th className="text-left py-3 px-4 font-semibold text-gray-700">Reason</th>
+                    <th className="text-right py-3 px-4 font-semibold text-gray-700">Actions</th>
                   </tr>
-                ) : (
-                  employeeBlockedDates.map((blocked) => (
-                    <tr key={blocked.id}>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {getEmployeeName(blocked.employee_id)}
+                </thead>
+                <tbody>
+                  {blockedDates.map((blocked) => (
+                    <tr key={blocked.id} className="border-b border-gray-100 hover:bg-gray-50">
+                      <td className="py-3 px-4">
+                        {blocked.blocked_date || blocked.holiday_date
+                          ? new Date(blocked.blocked_date || blocked.holiday_date).toLocaleDateString()
+                          : 'N/A'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(blocked.blocked_date).toLocaleDateString('en-US', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                        })}
+                      <td className="py-3 px-4">
+                        {blocked.type === 'organization_holiday' 
+                          ? 'Organization Holiday' 
+                          : (blocked.full_name || blocked.email || `Employee ${blocked.employee_id || 'N/A'}`)}
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
-                        {blocked.reason || '-'}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                      <td className="py-3 px-4">{blocked.reason || blocked.name || 'N/A'}</td>
+                      <td className="py-3 px-4 text-right">
                         <button
-                          onClick={() => handleDeleteEmployeeBlockedDate(blocked.id)}
-                          className="text-red-600 hover:text-red-900"
+                          onClick={() => handleDeleteBlockedDate(blocked)}
+                          className="text-red-600 hover:text-red-800 p-2"
+                          title="Delete blocked date"
                         >
-                          <Trash2 className="w-4 h-4 inline" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
-

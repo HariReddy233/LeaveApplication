@@ -99,34 +99,36 @@ export default function EditEmployeePage() {
   }, [hods]);
 
   // Update Admin selection when Admins are loaded and we have an admin_id
+  // CRITICAL: Only run when admins change, not when formData.admin_id changes
+  // This prevents infinite loops and unwanted resets
   useEffect(() => {
-    if (admins.length > 0 && formData.admin_id) {
-      console.log('🔍 Matching admin_id:', formData.admin_id, 'with loaded admins');
+    if (admins.length > 0 && formData.admin_id && formData.admin_id.trim() !== '') {
+      console.log('🔍 Checking admin_id matching. Current formData.admin_id:', formData.admin_id);
+      
       // Try to match the current admin_id with the loaded Admins
       // admin_id is the employee_id of the Admin, so we need to match it
       const matchingAdmin = admins.find((admin) => 
-        admin.employee_id?.toString() === formData.admin_id ||
-        admin.id?.toString() === formData.admin_id ||
-        admin.user_id?.toString() === formData.admin_id
+        admin.employee_id?.toString() === formData.admin_id?.toString() ||
+        admin.id?.toString() === formData.admin_id?.toString() ||
+        admin.user_id?.toString() === formData.admin_id?.toString()
       );
       
       if (matchingAdmin) {
-        // Update admin_id to match the dropdown value format
+        // Update admin_id to match the dropdown value format (prefer employee_id)
         const correctAdminId = matchingAdmin.employee_id?.toString() || matchingAdmin.id?.toString() || matchingAdmin.user_id?.toString() || '';
         console.log('✅ Found matching admin:', matchingAdmin.full_name || matchingAdmin.email, 'with employee_id:', correctAdminId);
+        // Only update if the value actually needs to change (to prevent loops)
         if (correctAdminId && correctAdminId !== formData.admin_id) {
+          console.log('🔄 Updating formData.admin_id from', formData.admin_id, 'to', correctAdminId);
           setFormData(prev => ({ ...prev, admin_id: correctAdminId }));
         }
       } else {
         console.warn('⚠️ No matching admin found for admin_id:', formData.admin_id);
-        console.log('Available admins:', admins.map(a => ({ 
-          employee_id: a.employee_id, 
-          user_id: a.user_id, 
-          name: a.full_name || a.email 
-        })));
+        // Don't clear admin_id - it might be valid but not in the list yet
+        // The user might have selected it before admins loaded
       }
     }
-  }, [admins]);
+  }, [admins]); // Only depend on admins, not formData.admin_id
 
   // Refetch departments and HODs when page becomes visible
   useEffect(() => {
@@ -178,11 +180,16 @@ export default function EditEmployeePage() {
 
         // Get current Admin assignment (admin_id) - for HODs
         let currentAdminId = '';
-        if (employee.admin_id) {
+        if (employee.admin_id !== null && employee.admin_id !== undefined) {
           currentAdminId = employee.admin_id.toString();
-          console.log('✅ Current Admin admin_id:', currentAdminId, '(type:', typeof employee.admin_id, ')');
+          console.log('✅ Current Admin admin_id from API:', currentAdminId, '(type:', typeof employee.admin_id, ')');
+          console.log('📊 Admin data from API:', {
+            admin_id: employee.admin_id,
+            admin_email: employee.admin_email,
+            admin_name: employee.admin_name
+          });
         } else {
-          console.log('ℹ️ No admin_id (Admin) assigned');
+          console.log('ℹ️ No admin_id (Admin) assigned - admin_id is:', employee.admin_id);
         }
         
         // Normalize role to lowercase for consistent comparison
@@ -201,6 +208,13 @@ export default function EditEmployeePage() {
           }
         }
         
+        // CRITICAL: Preserve existing admin_id if it exists and API returns null
+        // This prevents clearing admin_id during refetch if update hasn't propagated yet
+        // Only use API value if it's not null/undefined, otherwise preserve existing
+        const finalAdminId = (currentAdminId && currentAdminId.trim() !== '') 
+          ? currentAdminId 
+          : (formData.admin_id || '');
+        
         setFormData({
           full_name: employee.full_name || '',
           email: employee.email || '',
@@ -209,15 +223,22 @@ export default function EditEmployeePage() {
           department: employee.team || employee.department || '',
           designation: employee.designation || '',
           hod_id: currentHodId,
-          admin_id: currentAdminId,
+          admin_id: finalAdminId, // Use API value, but preserve existing if API is null
           phone_number: employee.phone_number || '',
         });
         
         console.log('✅ Form data set:', {
           location: employee.location || '',
           phone_number: employee.phone_number || '',
-          admin_id: currentAdminId,
-          hod_id: currentHodId
+          admin_id_from_api: currentAdminId,
+          admin_id_preserved: formData.admin_id,
+          admin_id_final: finalAdminId,
+          admin_id_type: typeof finalAdminId,
+          hod_id: currentHodId,
+          employee_admin_id: employee.admin_id,
+          employee_admin_email: employee.admin_email,
+          employee_admin_name: employee.admin_name,
+          role: normalizedRole
         });
       } else {
         setError('Employee not found');
@@ -329,10 +350,20 @@ export default function EditEmployeePage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setLoading(true);
     setError('');
 
     try {
+      // Validate: Admin assignment is mandatory for HODs
+      if (formData.role?.toLowerCase() === 'hod' && isAdmin && !isAdminEditingSelf) {
+        if (!formData.admin_id || formData.admin_id.trim() === '') {
+          setError('Assign Admin is required for HODs');
+          setLoading(false);
+          return;
+        }
+      }
+      
       console.log('📤 Submitting employee update with data:', {
         employeeId,
         hod_id: formData.hod_id,
@@ -353,31 +384,50 @@ export default function EditEmployeePage() {
         phone_number: formData.phone_number || null, // Ensure phone_number is sent
       };
       
-      // Only send hod_id/admin_id if:
-      // 1. User is admin (not HOD)
-      // 2. Not editing their own profile
-      // HODs don't need to assign HODs/Admins, so don't send these fields
+      // Always send hod_id/admin_id if user is admin (not HOD) and not editing themselves
+      // This ensures admin assignment is saved correctly
       if (isAdmin && !isAdminEditingSelf) {
-        // Send hod_id and admin_id, but use null instead of empty string
-        if (formData.hod_id) {
-          updateData.hod_id = formData.hod_id;
+        // Send hod_id - use null instead of empty string
+        updateData.hod_id = formData.hod_id && formData.hod_id.trim() !== '' ? formData.hod_id : null;
+        
+        // Always send admin_id for HODs - use null instead of empty string
+        // This is critical for saving admin assignment
+        // Send admin_id even if empty to allow clearing the assignment
+        if (formData.role?.toLowerCase() === 'hod') {
+          updateData.admin_id = formData.admin_id && formData.admin_id.trim() !== '' ? formData.admin_id : null;
+          console.log('📤 Admin assignment data for HOD:', {
+            admin_id: updateData.admin_id,
+            admin_id_type: typeof updateData.admin_id,
+            admin_id_original: formData.admin_id,
+            role: formData.role,
+            isAdmin: isAdmin,
+            isAdminEditingSelf: isAdminEditingSelf
+          });
         } else {
-          updateData.hod_id = null; // Send null instead of empty string
+          // For non-HODs, don't send admin_id (it will be ignored anyway)
+          console.log('ℹ️ Not sending admin_id - role is not HOD:', formData.role);
         }
-        if (formData.admin_id) {
-          updateData.admin_id = formData.admin_id;
-        } else {
-          updateData.admin_id = null; // Send null instead of empty string
-        }
+      } else {
+        console.warn('⚠️ Not sending admin_id - user is not admin or is editing self:', {
+          isAdmin,
+          isAdminEditingSelf,
+          role: formData.role
+        });
+        // Even if not admin, if role is HOD, we should still try to send admin_id
+        // But this should only happen if permissions allow it
+        // For now, keep the restriction but log it clearly
       }
       
       console.log('📤 Submitting employee update with data:', {
         ...updateData,
         location_value: formData.location,
         location_type: typeof formData.location,
-        location_in_payload: updateData.location
+        location_in_payload: updateData.location,
+        admin_id_in_payload: updateData.admin_id,
+        admin_id_type: typeof updateData.admin_id
       });
       console.log('📤 HOD ID being sent:', updateData.hod_id, '(type:', typeof updateData.hod_id, ')');
+      console.log('📤 Admin ID being sent:', updateData.admin_id, '(type:', typeof updateData.admin_id, ')');
       
       await api.patch(`/User/UpdateEmployee/${employeeId}`, updateData);
       
@@ -396,12 +446,10 @@ export default function EditEmployeePage() {
       }
       
       alert('Employee updated successfully!');
-      // Refetch employee data to show updated location
-      await fetchEmployee();
-      // Small delay to ensure data is refreshed
-      setTimeout(() => {
-        router.push('/dashboard/employees?refresh=true');
-      }, 500);
+      // CRITICAL: Don't refetch here - it causes double API call and form reset
+      // The redirect with ?refresh=true will trigger EmployeeList to refetch
+      // This prevents admin_id from being cleared before redirect
+      router.push('/dashboard/employees?refresh=true');
     } catch (err: any) {
       console.error('Employee update error:', err);
       if (err.response?.status === 401) {
@@ -496,11 +544,15 @@ export default function EditEmployeePage() {
                   value={formData.role}
                   onChange={(e) => {
                     const newRole = e.target.value;
-                    // Clear HOD assignment if role is changed to HOD
+                    // CRITICAL: Preserve admin_id when role changes
+                    // Only clear hod_id if role changes to HOD (HODs don't have HODs)
+                    // Do NOT clear admin_id - it should persist
                     setFormData({ 
                       ...formData, 
                       role: newRole,
-                      hod_id: newRole.toLowerCase() === 'hod' ? '' : formData.hod_id
+                      hod_id: newRole.toLowerCase() === 'hod' ? '' : formData.hod_id,
+                      // Preserve admin_id - don't clear it
+                      admin_id: formData.admin_id
                     });
                   }}
                   required
@@ -632,24 +684,25 @@ export default function EditEmployeePage() {
               </div>
             )}
 
-            {/* Admin Assignment - Only for HODs (not for employees or admins) */}
+            {/* Admin Assignment - Only for HODs (Mandatory) */}
             {/* Only show if user is admin (HODs don't need to assign Admins) */}
             {(formData.role?.toLowerCase() === 'hod' || formData.role?.toLowerCase() === 'HOD') && !isAdminEditingSelf && isAdmin && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label htmlFor="admin_id" className="block text-sm font-medium text-gray-700 mb-2">
-                    Assign Admin
+                    Assign Admin <span className="text-red-500">*</span>
                   </label>
                   <select
                     id="admin_id"
                     value={formData.admin_id}
                     onChange={(e) => setFormData({ ...formData, admin_id: e.target.value })}
                     disabled={adminsLoading}
+                    required
                     className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
                       adminsLoading ? 'bg-gray-100 cursor-not-allowed' : 'border-gray-300'
                     }`}
                   >
-                    <option value="">{adminsLoading ? 'Loading Admins...' : 'Select Admin (Optional)'}</option>
+                    <option value="">{adminsLoading ? 'Loading Admins...' : 'Select Admin'}</option>
                     {admins.length === 0 && !adminsLoading ? (
                       <option value="" disabled>No Admins available</option>
                     ) : (
@@ -664,7 +717,7 @@ export default function EditEmployeePage() {
                     )}
                   </select>
                   <p className="mt-1 text-xs text-gray-500">
-                    Select the Admin who will receive notifications when this HOD approves leaves
+                    Select the Admin who will receive notifications when this HOD approves leaves (Required)
                   </p>
                 </div>
               </div>

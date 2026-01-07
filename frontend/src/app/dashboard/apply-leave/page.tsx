@@ -49,11 +49,50 @@ export default function ApplyLeavePage() {
 
   const fetchLeaveTypes = async () => {
     try {
-      // Fetch from API - all leave types are dynamic from DB
-      const response = await api.get('/LeaveType/LeaveTypeList');
+      // Get employee location first - try UserProfile API (more efficient)
+      let employeeLocation = null;
+      try {
+        // Try UserProfile API first (returns location directly)
+        const profileResponse = await api.get('/User/UserProfile').catch(() => null);
+        if (profileResponse?.data?.data?.location) {
+          employeeLocation = profileResponse.data.data.location;
+          console.log(`✅ Got location from UserProfile: ${employeeLocation}`);
+        } else {
+          // Fallback: Get from EmployeeList
+          const userResponse = await api.get('/Auth/Me');
+          if (userResponse.data?.user) {
+            const empResponse = await api.get('/User/EmployeeList').catch(() => ({ data: { data: [] } }));
+            const employees = empResponse.data?.data || empResponse.data?.Data || [];
+            const currentEmployee = employees.find((emp: any) => 
+              emp.user_id === userResponse.data.user.user_id || 
+              emp.id === userResponse.data.user.user_id?.toString()
+            );
+            employeeLocation = currentEmployee?.location || null;
+            if (employeeLocation) {
+              console.log(`✅ Got location from EmployeeList: ${employeeLocation}`);
+            }
+          }
+        }
+      } catch (locError) {
+        console.warn('Could not fetch employee location:', locError);
+      }
+
+      // Fetch leave types with location filter
+      const response = await api.get('/LeaveType/LeaveTypeList', {
+        params: employeeLocation ? { location: employeeLocation } : {}
+      });
       const types = response.data?.data || response.data?.Data || response.data || [];
-      if (Array.isArray(types) && types.length > 0) {
-        setLeaveTypes(types.map((type: any) => ({
+      
+      // Filter by location on frontend as well (in case backend doesn't filter)
+      const filteredTypes = types.filter((type: any) => {
+        if (!type.location || type.location === 'All') return true;
+        return type.location === employeeLocation;
+      });
+      
+      console.log(`📋 Leave types filtered by location "${employeeLocation}": ${filteredTypes.length} types`);
+      
+      if (Array.isArray(filteredTypes) && filteredTypes.length > 0) {
+        setLeaveTypes(filteredTypes.map((type: any) => ({
           value: type.name || type.leave_type || type.value,
           label: type.name || type.leave_type || type.label
         })));
@@ -89,28 +128,10 @@ export default function ApplyLeavePage() {
       const response = await api.get(`/Leave/LeaveDetails/${leaveId}`);
       if (response.data?.data) {
         const leave = response.data.data;
-        
-        // Format dates to YYYY-MM-DD for date input fields
-        const formatDateForInput = (dateStr: string) => {
-          if (!dateStr) return '';
-          try {
-            const date = new Date(dateStr);
-            if (isNaN(date.getTime())) return '';
-            // Format as YYYY-MM-DD (local date, not UTC)
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-          } catch (e) {
-            console.warn('Failed to format date:', dateStr, e);
-            return dateStr.split('T')[0]; // Fallback: take date part before T
-          }
-        };
-        
         setFormData({
           leave_type: leave.leave_type || '',
-          start_date: formatDateForInput(leave.start_date || ''),
-          end_date: formatDateForInput(leave.end_date || ''),
+          start_date: leave.start_date || '',
+          end_date: leave.end_date || '',
           number_of_days: leave.number_of_days?.toString() || '',
           leave_details: leave.reason || leave.leave_details || '',
         });
@@ -194,34 +215,42 @@ export default function ApplyLeavePage() {
     }
   };
 
-  // Calculate days excluding weekends (Saturday and Sunday)
-  const calculateDays = () => {
+  // Calculate working days excluding weekends and holidays
+  const calculateWorkingDays = async () => {
     if (formData.start_date && formData.end_date) {
-      const start = new Date(formData.start_date);
-      const end = new Date(formData.end_date);
-      
-      // Reset time to midnight for accurate day calculation
-      start.setHours(0, 0, 0, 0);
-      end.setHours(0, 0, 0, 0);
-      
-      let count = 0;
-      const current = new Date(start);
-      
-      while (current <= end) {
-        const dayOfWeek = current.getDay();
-        // Exclude weekends (0 = Sunday, 6 = Saturday)
-        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-          count++;
+      try {
+        // Call API to calculate working days (excludes weekends and holidays)
+        const response = await api.post('/Leave/CalculateWorkingDays', {
+          start_date: formData.start_date,
+          end_date: formData.end_date
+        });
+        
+        if (response.data?.working_days) {
+          setFormData({ ...formData, number_of_days: response.data.working_days.toString() });
         }
-        current.setDate(current.getDate() + 1);
+      } catch (err: any) {
+        // If API fails, calculate excluding weekends only (fallback)
+        console.warn('Failed to calculate working days from API, using weekend exclusion only:', err);
+        const start = new Date(formData.start_date);
+        const end = new Date(formData.end_date);
+        let workingDays = 0;
+        const currentDate = new Date(start);
+        
+        while (currentDate <= end) {
+          const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 6 = Saturday
+          if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+            workingDays++;
+          }
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+        
+        setFormData({ ...formData, number_of_days: workingDays.toString() });
       }
-      
-      setFormData({ ...formData, number_of_days: count.toString() });
     }
   };
 
   useEffect(() => {
-    calculateDays();
+    calculateWorkingDays();
   }, [formData.start_date, formData.end_date]);
 
   // Update selected leave balance when leave type changes
@@ -266,52 +295,9 @@ export default function ApplyLeavePage() {
     setBalanceError('');
     setOverlapError('');
 
-    // Check for overlapping dates and blocked dates before submission
+    // Check for overlapping dates before submission
     if (formData.start_date && formData.end_date) {
       try {
-        // Check blocked dates (organization holidays + employee-specific)
-        // Use AllBlockedDates to get both organization holidays and employee blocked dates
-        const startDateStr = formData.start_date;
-        const endDateStr = formData.end_date;
-        const blockedDatesResponse = await api.get(`/Calendar/AllBlockedDates?start_date=${startDateStr}&end_date=${endDateStr}`).catch(() => ({ data: { data: [] } }));
-        const allBlockedDates = blockedDatesResponse.data?.data || [];
-        
-        // Get all dates in the range
-        const start = new Date(formData.start_date);
-        const end = new Date(formData.end_date);
-        start.setHours(0, 0, 0, 0);
-        end.setHours(0, 0, 0, 0);
-        
-        const datesInRange: string[] = [];
-        const current = new Date(start);
-        while (current <= end) {
-          datesInRange.push(current.toISOString().split('T')[0]);
-          current.setDate(current.getDate() + 1);
-        }
-        
-        // Check if any date in range is blocked (organization holiday or employee-specific)
-        const blockedInRange = allBlockedDates.filter((blocked: any) => {
-          // Handle both organization holidays (holiday_date) and employee blocked dates (blocked_date)
-          const blockedDate = blocked.holiday_date || blocked.blocked_date;
-          if (!blockedDate) return false;
-          const blockedDateStr = new Date(blockedDate).toISOString().split('T')[0];
-          return datesInRange.includes(blockedDateStr);
-        });
-        
-        if (blockedInRange.length > 0) {
-          const blockedItem = blockedInRange[0];
-          const blockedDate = new Date(blockedItem.holiday_date || blockedItem.blocked_date);
-          const reason = blockedItem.reason || blockedItem.holiday_name || 'blocked date';
-          const isHoliday = blockedItem.type === 'organization_holiday';
-          const errorMsg = isHoliday 
-            ? `Leave is not allowed on ${blockedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}. Organization Holiday: ${reason}. Please select different dates.`
-            : `Leave is not allowed on ${blockedDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}. ${reason}. Please select different dates.`;
-          setError(errorMsg);
-          setLoading(false);
-          return;
-        }
-        
-        // Check overlapping leaves
         const overlapResponse = await api.post('/Leave/CheckOverlappingLeaves', {
           start_date: formData.start_date,
           end_date: formData.end_date,
@@ -330,7 +316,7 @@ export default function ApplyLeavePage() {
           return;
         }
       } catch (err: any) {
-        console.error('Failed to check dates:', err);
+        console.error('Failed to check overlapping dates:', err);
         // Continue with submission if check fails (backend will validate)
       }
     }
@@ -421,7 +407,17 @@ export default function ApplyLeavePage() {
                 <select
                   id="leave_type"
                   value={formData.leave_type}
-                  onChange={(e) => setFormData({ ...formData, leave_type: e.target.value })}
+                  onChange={(e) => {
+                    // Clear remaining fields when leave type changes, but keep leave_details
+                    setFormData({
+                      ...formData,
+                      leave_type: e.target.value,
+                      start_date: '',
+                      end_date: '',
+                      number_of_days: '',
+                      // leave_details is preserved
+                    });
+                  }}
                   required
                   disabled={isUpdate}
                   className="form-input disabled:bg-gray-100 disabled:cursor-not-allowed"
@@ -575,7 +571,7 @@ export default function ApplyLeavePage() {
             )}
 
             {/* Submit Button */}
-            <div className="mt-4 flex gap-3">
+            <div className="mt-4">
               <button
                 type="submit"
                 disabled={loading || (!isUpdate && balanceError !== '') || overlapError !== ''}
@@ -584,16 +580,6 @@ export default function ApplyLeavePage() {
               >
                 {loading ? 'Submitting...' : isUpdate ? 'Update Leave' : 'Apply for Leave'}
               </button>
-              {isUpdate && (
-                <button
-                  type="button"
-                  onClick={() => router.push('/dashboard/leaves')}
-                  className="bg-gray-200 text-gray-700 px-6 py-2.5 rounded-lg font-medium hover:bg-gray-300 transition-colors text-sm"
-                  style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
-                >
-                  Cancel
-                </button>
-              )}
               {!isUpdate && (balanceError || overlapError) && (
                 <p className="mt-2 text-xs text-gray-500">
                   {balanceError ? 'Please adjust your leave request or contact HR to increase your leave balance.' : ''}

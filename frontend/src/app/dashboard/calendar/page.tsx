@@ -11,6 +11,7 @@ export default function CalendarPage() {
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({
     employee_id: '',
+    location: '',
   });
   const [employees, setEmployees] = useState<any[]>([]);
   const [loadingFilters, setLoadingFilters] = useState(true);
@@ -18,6 +19,7 @@ export default function CalendarPage() {
   const [selectedDateLeaves, setSelectedDateLeaves] = useState<any[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [userRole, setUserRole] = useState<string>('');
+  const [userLocation, setUserLocation] = useState<string>('');
 
   // Get current month and year
   const currentMonth = currentDate.getMonth();
@@ -58,38 +60,34 @@ export default function CalendarPage() {
   // Map leaves and blocked dates to calendar days
   const calendarWithLeaves = useMemo(() => {
     return calendarDays.map(day => {
+      // Get day date as YYYY-MM-DD string (no timezone conversion)
+      const dayDateStr = `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
+      
       const dayLeaves = leaves.filter(leave => {
-        const startDate = new Date(leave.start_date);
-        const endDate = new Date(leave.end_date);
-        const dayDate = new Date(day.date);
+        // Extract date strings (YYYY-MM-DD) without timezone conversion
+        const startDateStr = typeof leave.start_date === 'string' 
+          ? leave.start_date.split('T')[0] 
+          : leave.start_date;
+        const endDateStr = typeof leave.end_date === 'string' 
+          ? leave.end_date.split('T')[0] 
+          : leave.end_date;
         
-        // Reset time to compare dates only
-        startDate.setHours(0, 0, 0, 0);
-        endDate.setHours(0, 0, 0, 0);
-        dayDate.setHours(0, 0, 0, 0);
-        
-        return dayDate >= startDate && dayDate <= endDate;
+        // Compare as strings (YYYY-MM-DD format sorts correctly)
+        return dayDateStr >= startDateStr && dayDateStr <= endDateStr;
       });
       
       // Check if this day is blocked (holiday or employee-specific) and get details
-      // Use local date string (YYYY-MM-DD) to avoid timezone shift issues
-      const dayDateStr = `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
+      // Compare dates as strings (YYYY-MM-DD) to avoid timezone conversion issues
       let blockedInfo = null;
       const blockedDateMatch = blockedDates.find(blocked => {
         // Handle both organization holidays (holiday_date) and employee blocked dates (blocked_date)
         const blockedDate = blocked.holiday_date || blocked.blocked_date;
         if (!blockedDate) return false;
         
-        // Parse date string (YYYY-MM-DD) or Date object, avoiding timezone conversion
-        let blockedDateStr: string;
-        if (typeof blockedDate === 'string') {
-          // If it's already a string in YYYY-MM-DD format, use it directly
-          blockedDateStr = blockedDate.split('T')[0]; // Remove time part if present
-        } else {
-          // If it's a Date object, use local date components (not UTC)
-          const blockedDateObj = new Date(blockedDate);
-          blockedDateStr = `${blockedDateObj.getFullYear()}-${String(blockedDateObj.getMonth() + 1).padStart(2, '0')}-${String(blockedDateObj.getDate()).padStart(2, '0')}`;
-        }
+        // Extract date string (YYYY-MM-DD) - backend now returns plain strings
+        const blockedDateStr = typeof blockedDate === 'string' 
+          ? blockedDate.split('T')[0] 
+          : String(blockedDate).split('T')[0];
         
         return blockedDateStr === dayDateStr;
       });
@@ -148,11 +146,46 @@ export default function CalendarPage() {
         }
       }
       
+      // Location filter is only for holidays, NOT for leaves
+      // Approved leaves are visible organization-wide (all users see all approved leaves)
+      // Create separate params for holidays API
+      const holidayParams = new URLSearchParams();
+      holidayParams.append('start_date', startDate.toISOString().split('T')[0]);
+      holidayParams.append('end_date', endDate.toISOString().split('T')[0]);
+      
+      // Add location filter to holidays API only
+      if (filters.location && filters.location !== '') {
+        // Map filter value to backend format
+        const mapFilterToBackend = (filter) => {
+          if (filter === 'IN') return 'IN'; // Backend handles both IN and India
+          if (filter === 'US') return 'US';
+          if (filter === 'All') return 'All';
+          return filter;
+        };
+        holidayParams.append('location', mapFilterToBackend(filters.location));
+      }
+      
+      // Add employee filter to holidays if selected
+      if (filters.employee_id) {
+        const currentEmployees = employees.length > 0 ? employees : [];
+        const selectedEmp = currentEmployees.find((emp: any) => {
+          const empId = emp.employee_id || emp.user_id || emp.id;
+          return empId.toString() === filters.employee_id.toString();
+        });
+        if (selectedEmp?.user_id) {
+          holidayParams.append('user_id', selectedEmp.user_id);
+        } else {
+          holidayParams.append('employee_id', filters.employee_id);
+        }
+      }
+      
       const [leavesResponse, blockedDatesResponse] = await Promise.all([
+        // Leaves API: NO location filter - shows all approved leaves organization-wide
         api.get(`/Calendar/CalendarView?${params.toString()}`, {
           headers: { 'X-Skip-Redirect': 'true' }
         }),
-        api.get(`/Calendar/AllBlockedDates?${params.toString()}`, {
+        // Holidays API: WITH location filter - shows holidays for selected location + "All"
+        api.get(`/Calendar/AllBlockedDates?${holidayParams.toString()}`, {
           headers: { 'X-Skip-Redirect': 'true' }
         }).catch(() => ({ data: { data: [] } })) // Silently fail if no permission
       ]);
@@ -200,13 +233,35 @@ export default function CalendarPage() {
     }
   };
 
-  // Fetch user role
+  // Fetch user role and location
   useEffect(() => {
     const fetchUserRole = async () => {
       try {
         const response = await api.get('/Auth/Me');
         if (response.data?.user?.role) {
           setUserRole(response.data.user.role.toLowerCase());
+        }
+        // Get user location and set as default filter
+        if (response.data?.user?.location) {
+          const userLoc = response.data.user.location;
+          setUserLocation(userLoc);
+          // Map location to filter value (India -> IN, US -> US)
+          const mapLocationToFilter = (loc) => {
+            if (!loc) return '';
+            const l = loc.toString().trim();
+            if (l === 'India' || l === 'IN') return 'IN';
+            if (l === 'US' || l === 'United States') return 'US';
+            return l;
+          };
+          const filterValue = mapLocationToFilter(userLoc);
+          // Set default location filter for all users (including admin)
+          // Only set if filter is not already set (to avoid overwriting user selection)
+          setFilters(prev => {
+            if (!prev.location && filterValue) {
+              return { ...prev, location: filterValue };
+            }
+            return prev;
+          });
         }
       } catch (err) {
         console.error('Failed to fetch user role:', err);
@@ -282,6 +337,21 @@ export default function CalendarPage() {
                   </option>
                 );
               })}
+            </select>
+          </div>
+          <div className="w-full max-w-xs">
+            <label htmlFor="location-filter" className="form-label text-sm mb-2">
+              Filter by Location
+            </label>
+            <select
+              id="location-filter"
+              value={filters.location}
+              onChange={(e) => setFilters({ ...filters, location: e.target.value })}
+              className="form-input"
+            >
+              <option value="">All</option>
+              <option value="IN">IN (India)</option>
+              <option value="US">US (United States)</option>
             </select>
           </div>
         </div>
@@ -366,6 +436,9 @@ export default function CalendarPage() {
                 idx === self.findIndex(l => l.id === leave.id)
               );
               
+              // Get day date as YYYY-MM-DD string for comparisons (no timezone conversion)
+              const dayDateStr = `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
+              
               // Build tooltip text for blocked dates
               let tooltipText = '';
               if (isBlocked && blockedInfo) {
@@ -408,17 +481,33 @@ export default function CalendarPage() {
                   </div>
                   <div className="space-y-1">
                     {uniqueLeaves.slice(0, 2).map((leave) => {
-                      const startDate = new Date(leave.start_date);
-                      const endDate = new Date(leave.end_date);
-                      const isStart = day.date.toDateString() === startDate.toDateString();
-                      const isEnd = day.date.toDateString() === endDate.toDateString();
+                      // Extract date strings (YYYY-MM-DD) without timezone conversion
+                      const startDateStr = typeof leave.start_date === 'string' 
+                        ? leave.start_date.split('T')[0] 
+                        : leave.start_date;
+                      const endDateStr = typeof leave.end_date === 'string' 
+                        ? leave.end_date.split('T')[0] 
+                        : leave.end_date;
+                      
+                      // Compare dates as strings
+                      const isStart = dayDateStr === startDateStr;
+                      const isEnd = dayDateStr === endDateStr;
                       const isRange = !isStart && !isEnd;
                       const employeeName = (leave.full_name || leave.email || 'Unknown').split(' ')[0];
                       
-                      // Format dates for tooltip
-                      const fromDate = startDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-                      const toDate = endDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-                      const daysCount = leave.number_of_days || Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                      // Format dates for tooltip (parse only for display, not comparison)
+                      const startDateForDisplay = new Date(startDateStr + 'T00:00:00');
+                      const endDateForDisplay = new Date(endDateStr + 'T00:00:00');
+                      const fromDate = startDateForDisplay.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                      const toDate = endDateForDisplay.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                      // Calculate days using date strings to avoid timezone issues
+                      const daysCount = leave.number_of_days || (() => {
+                        const [startY, startM, startD] = startDateStr.split('-').map(Number);
+                        const [endY, endM, endD] = endDateStr.split('-').map(Number);
+                        const start = new Date(startY, startM - 1, startD);
+                        const end = new Date(endY, endM - 1, endD);
+                        return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                      })();
                       const tooltipText = `${leave.full_name || leave.email || 'Unknown'}\nLeave Type: ${leave.leave_type || 'N/A'}\nFrom: ${fromDate}\nTo: ${toDate}\nDuration: ${daysCount} day${daysCount !== 1 ? 's' : ''}${leave.reason ? `\nReason: ${leave.reason}` : ''}`;
                       
                       return (
@@ -529,11 +618,27 @@ export default function CalendarPage() {
             <div className="flex-1 overflow-y-auto p-6">
               <div className="space-y-4">
                 {selectedDateLeaves.map((leave) => {
-                  const startDate = new Date(leave.start_date);
-                  const endDate = new Date(leave.end_date);
-                  const fromDate = startDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-                  const toDate = endDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-                  const daysCount = leave.number_of_days || Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                  // Extract date strings (YYYY-MM-DD) without timezone conversion
+                  const startDateStr = typeof leave.start_date === 'string' 
+                    ? leave.start_date.split('T')[0] 
+                    : leave.start_date;
+                  const endDateStr = typeof leave.end_date === 'string' 
+                    ? leave.end_date.split('T')[0] 
+                    : leave.end_date;
+                  
+                  // Parse only for display formatting (add T00:00:00 to avoid timezone shift)
+                  const startDateForDisplay = new Date(startDateStr + 'T00:00:00');
+                  const endDateForDisplay = new Date(endDateStr + 'T00:00:00');
+                  const fromDate = startDateForDisplay.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                  const toDate = endDateForDisplay.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                  // Calculate days using date strings to avoid timezone issues
+                  const daysCount = leave.number_of_days || (() => {
+                    const [startY, startM, startD] = startDateStr.split('-').map(Number);
+                    const [endY, endM, endD] = endDateStr.split('-').map(Number);
+                    const start = new Date(startY, startM - 1, startD);
+                    const end = new Date(endY, endM - 1, endD);
+                    return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+                  })();
                   // Determine status with actual approver names
                   // Determine status - For Admin, only show admin_status
                   let status = '';
@@ -552,16 +657,34 @@ export default function CalendarPage() {
                     }
                   } else {
                     // HOD/Employee view: Show combined status
-                    if (leave.hod_status === 'Approved' && leave.admin_status === 'Approved') {
-                      status = 'Fully Approved';
-                    } else if (leave.hod_status === 'Approved') {
-                      const approverName = leave.hod_approver_name || 'HOD';
-                      status = `Approved by ${approverName}`;
-                    } else if (leave.admin_status === 'Approved') {
-                      const approverName = leave.admin_approver_name || 'Admin';
-                      status = `Approved by ${approverName}`;
+                    // Check if this is a HOD-applied leave (HOD leaves skip HOD approval)
+                    const isHodAppliedLeave = (leave.employee_role || '').toLowerCase() === 'hod' && 
+                                              (leave.hod_status || 'Pending') === 'Pending' && 
+                                              !leave.approved_by_hod;
+                    
+                    if (isHodAppliedLeave) {
+                      // HOD-applied leaves: Only show Admin status
+                      if (leave.admin_status === 'Approved') {
+                        const approverName = leave.admin_approver_name || 'Admin';
+                        status = `Approved by ${approverName}`;
+                      } else if (leave.admin_status === 'Rejected') {
+                        status = 'Rejected';
+                      } else {
+                        status = 'Pending';
+                      }
                     } else {
-                      status = 'Pending';
+                      // Regular employee leaves: Show combined status
+                      if (leave.hod_status === 'Approved' && leave.admin_status === 'Approved') {
+                        status = 'Fully Approved';
+                      } else if (leave.hod_status === 'Approved') {
+                        const approverName = leave.hod_approver_name || 'HOD';
+                        status = `Approved by ${approverName}`;
+                      } else if (leave.admin_status === 'Approved') {
+                        const approverName = leave.admin_approver_name || 'Admin';
+                        status = `Approved by ${approverName}`;
+                      } else {
+                        status = 'Pending';
+                      }
                     }
                   }
 

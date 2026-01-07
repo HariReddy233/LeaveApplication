@@ -154,6 +154,7 @@ export default function LeaveTypesPage() {
                   <tr>
                     <th>Name</th>
                     <th>Max Days</th>
+                    <th>Location</th>
                     <th>Description</th>
                     <th>Actions</th>
                   </tr>
@@ -163,6 +164,12 @@ export default function LeaveTypesPage() {
                     <tr key={type.id}>
                       <td className="font-medium text-gray-900">{type.name}</td>
                       <td className="text-gray-700">{type.max_days || '-'}</td>
+                      <td className="text-gray-700">
+                        {type.location === 'IN' ? 'IN (India)' : 
+                         type.location === 'US' ? 'US (United States)' : 
+                         type.location === 'All' ? 'All' : 
+                         type.location || 'IN (India)'}
+                      </td>
                       <td className="text-gray-700">{type.description || '-'}</td>
                       <td>
                         <div className="flex items-center gap-3">

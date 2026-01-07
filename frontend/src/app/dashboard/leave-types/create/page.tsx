@@ -14,6 +14,7 @@ export default function CreateLeaveTypePage() {
     max_days: '',
     carry_forward: false,
     description: '',
+    location: 'IN', // Default to IN (India)
     is_active: true,
   });
   const [loading, setLoading] = useState(false);
@@ -60,6 +61,7 @@ export default function CreateLeaveTypePage() {
         max_days: formData.max_days ? parseInt(formData.max_days) : null,
         carry_forward: formData.carry_forward,
         description: formData.description || null,
+        location: formData.location || null,
         is_active: formData.is_active,
       });
       
@@ -150,6 +152,23 @@ export default function CreateLeaveTypePage() {
                       className="form-input"
                       placeholder="e.g., 12"
                     />
+              </div>
+
+              {/* Location */}
+              <div>
+                <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-2">
+                  Location
+                </label>
+                <select
+                  id="location"
+                  value={formData.location}
+                  onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                >
+                  <option value="IN">IN (India)</option>
+                  <option value="US">US (United States)</option>
+                  <option value="All">All</option>
+                </select>
               </div>
 
               {/* Carry Forward */}

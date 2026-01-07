@@ -114,7 +114,6 @@ export const PermissionKeys = {
   
   // Reports
   REPORTS_VIEW: 'reports.view',
-  REPORTS_EXPORT: 'reports.export',
   
   // Dashboard
   DASHBOARD_VIEW: 'dashboard.view',

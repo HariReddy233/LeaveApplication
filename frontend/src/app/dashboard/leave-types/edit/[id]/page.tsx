@@ -16,6 +16,7 @@ export default function EditLeaveTypePage() {
     max_days: '',
     carry_forward: false,
     description: '',
+    location: '',
     is_active: true,
   });
   const [loading, setLoading] = useState(false);
@@ -67,6 +68,7 @@ export default function EditLeaveTypePage() {
           max_days: leaveType.max_days?.toString() || '',
           carry_forward: leaveType.carry_forward || false,
           description: leaveType.description || '',
+          location: leaveType.location || 'IN', // Default to IN if not set
           is_active: leaveType.is_active !== false,
         });
       } else {
@@ -85,15 +87,21 @@ export default function EditLeaveTypePage() {
     setLoading(true);
     setError('');
 
+    const payload = {
+      name: formData.name,
+      code: formData.code || null,
+      max_days: formData.max_days ? parseInt(formData.max_days) : null,
+      carry_forward: formData.carry_forward,
+      description: formData.description || null,
+      location: formData.location || 'IN', // Always send location, default to 'IN'
+      is_active: formData.is_active,
+    };
+    
+    console.log('📤 Updating leave type with payload:', payload);
+    console.log('📤 Location value:', formData.location, 'Type:', typeof formData.location);
+
     try {
-      await api.patch(`/LeaveType/LeaveTypeUpdate/${id}`, {
-        name: formData.name,
-        code: formData.code || null,
-        max_days: formData.max_days ? parseInt(formData.max_days) : null,
-        carry_forward: formData.carry_forward,
-        description: formData.description || null,
-        is_active: formData.is_active,
-      });
+      await api.patch(`/LeaveType/LeaveTypeUpdate/${id}`, payload);
       
       alert('Leave type updated successfully!');
       router.push('/dashboard/leave-types?refresh=true');
@@ -192,6 +200,23 @@ export default function EditLeaveTypePage() {
                 />
               </div>
 
+              {/* Location */}
+              <div>
+                <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-2">
+                  Location
+                </label>
+                <select
+                  id="location"
+                  value={formData.location || 'IN'}
+                  onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm"
+                >
+                  <option value="IN">IN (India)</option>
+                  <option value="US">US (United States)</option>
+                  <option value="All">All</option>
+                </select>
+              </div>
+
               {/* Carry Forward */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -257,7 +282,7 @@ export default function EditLeaveTypePage() {
           </form>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 

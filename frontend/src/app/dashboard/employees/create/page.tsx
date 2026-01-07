@@ -151,16 +151,45 @@ export default function CreateEmployeePage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setLoading(true);
     setError('');
 
     try {
+      // Validate: Admin assignment is mandatory for HODs
+      if (formData.role?.toLowerCase() === 'hod') {
+        if (!formData.admin_id || formData.admin_id.trim() === '') {
+          setError('Assign Admin is required for HODs');
+          setLoading(false);
+          return;
+        }
+      }
+      
+      // Prepare payload - ensure admin_id is sent correctly (null if empty, value if set)
+      const payload = {
+        ...formData,
+        admin_id: formData.admin_id && formData.admin_id.trim() !== '' ? formData.admin_id : null,
+        hod_id: formData.hod_id && formData.hod_id.trim() !== '' ? formData.hod_id : null,
+      };
+      
+      console.log('📤 Creating employee with payload:', {
+        ...payload,
+        admin_id_value: payload.admin_id,
+        admin_id_type: typeof payload.admin_id,
+        role: payload.role
+      });
+      
       // Location is already "IN" or "US" from dropdown - no normalization needed
-      await api.post('/Auth/RegisterUserWithPermission', formData);
+      await api.post('/Auth/RegisterUserWithPermission', payload);
+      
+      // Show success message
+      alert('Employee created successfully!');
+      
       // Redirect with refresh parameter to trigger refetch
       router.push('/dashboard/employees?refresh=true');
     } catch (err: any) {
       console.error('Employee creation error:', err);
+      
       if (err.response?.status === 401) {
         // 401 = Authentication failed - redirect to login
         setError('Session expired. Please login again.');
@@ -171,7 +200,7 @@ export default function CreateEmployeePage() {
         // 403 = Permission denied - show error but don't redirect
         setError(err.response?.data?.message || 'You do not have permission to create employees. Please contact your administrator.');
       } else {
-        setError(err.response?.data?.message || 'Failed to create employee');
+        setError(err.response?.data?.message || err.response?.data?.error || 'Failed to create employee');
       }
     } finally {
       setLoading(false);
@@ -393,22 +422,23 @@ export default function CreateEmployeePage() {
                 </div>
               )}
 
-              {/* Admin Assignment - Only for HODs */}
+              {/* Admin Assignment - Only for HODs (Mandatory) */}
               {formData.role?.toLowerCase() === 'hod' && (
                 <div>
                   <label htmlFor="admin_id" className="block text-sm font-medium text-gray-700 mb-2">
-                    Assign Admin
+                    Assign Admin <span className="text-red-500">*</span>
                   </label>
                   <select
                     id="admin_id"
                     value={formData.admin_id}
                     onChange={(e) => setFormData({ ...formData, admin_id: e.target.value })}
                     disabled={adminsLoading}
+                    required
                     className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
                       adminsLoading ? 'bg-gray-100 cursor-not-allowed' : 'border-gray-300'
                     }`}
                   >
-                    <option value="">{adminsLoading ? 'Loading Admins...' : 'Select Admin (Optional)'}</option>
+                    <option value="">{adminsLoading ? 'Loading Admins...' : 'Select Admin'}</option>
                     {admins.length === 0 && !adminsLoading ? (
                       <option value="" disabled>No Admins available</option>
                     ) : (
@@ -423,14 +453,14 @@ export default function CreateEmployeePage() {
                     )}
                   </select>
                   <p className="mt-1 text-xs text-gray-500">
-                    Select the Admin who will receive notifications when this HOD approves leaves
+                    Select the Admin who will receive notifications when this HOD approves leaves (Required)
                   </p>
                 </div>
               )}
             </div>
 
             {/* Submit Button */}
-            <div className="mt-4">
+            <div className="mt-4 flex gap-3">
               <button
                 type="submit"
                 disabled={loading}
@@ -438,6 +468,14 @@ export default function CreateEmployeePage() {
                 style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
               >
                 {loading ? 'Creating...' : 'Create Employee'}
+              </button>
+              <button
+                type="button"
+                onClick={() => router.back()}
+                className="bg-gray-200 text-gray-700 px-6 py-2.5 rounded-lg font-medium hover:bg-gray-300 transition-colors text-sm"
+                style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
+              >
+                Cancel
               </button>
             </div>
           </form>
