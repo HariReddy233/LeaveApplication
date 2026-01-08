@@ -7,6 +7,11 @@ import { CreateError } from "../../helper/ErrorHandler.js";
  */
 export const GetAllEmployeesService = async (Request) => {
   const { location, team, manager } = Request.query;
+  const userId = Request.UserId;
+  const userRole = Request.Role;
+  
+  // Log for debugging
+  console.log(`📋 GetAllEmployeesService called by user ${userId} (role: ${userRole})`);
   
   try {
     // Join with employees table to get manager_id and location, and join with HOD info
@@ -95,7 +100,12 @@ export const GetAllEmployeesService = async (Request) => {
     const startTime = Date.now();
     const result = await database.query(query, params);
     const queryTime = Date.now() - startTime;
-    console.log(`GetAllEmployeesService executed in ${queryTime}ms, returned ${result.rows.length} rows`);
+    console.log(`✅ GetAllEmployeesService executed in ${queryTime}ms, returned ${result.rows.length} rows for user ${userId} (role: ${userRole})`);
+    
+    // If no employees returned, log warning
+    if (result.rows.length === 0) {
+      console.warn(`⚠️ GetAllEmployeesService returned 0 employees for user ${userId} (role: ${userRole}). This might indicate a permission or data issue.`);
+    }
     
     // Debug: Log employees with manager_id to verify data
     const employeesWithManager = result.rows.filter(r => r.manager_id);
@@ -411,10 +421,10 @@ export const GetAdminsListService = async (Request) => {
       if (!admin.employee_id) {
         try {
           const createResult = await database.query(
-            `INSERT INTO employees (user_id, role)
-             VALUES ($1, 'admin')
+            `INSERT INTO employees (user_id)
+             VALUES ($1)
              ON CONFLICT (user_id) DO UPDATE SET
-               role = 'admin'
+               updated_at = NOW()
              RETURNING employee_id`,
             [admin.user_id]
           );
@@ -504,10 +514,10 @@ export const GetHodsListService = async (Request) => {
             let createResult;
             try {
               createResult = await database.query(
-                `INSERT INTO employees (user_id, role)
-                 VALUES ($1, 'HOD')
+                `INSERT INTO employees (user_id)
+                 VALUES ($1)
                  ON CONFLICT (user_id) DO UPDATE SET
-                   role = 'HOD'
+                   updated_at = NOW()
                  RETURNING employee_id`,
                 [hod.user_id]
               );
@@ -516,8 +526,8 @@ export const GetHodsListService = async (Request) => {
               if (columnError.code === '42703' || columnError.message.includes('column')) {
                 try {
                   createResult = await database.query(
-                    `INSERT INTO employees (user_id, role)
-                     VALUES ($1, 'HOD')
+                    `INSERT INTO employees (user_id)
+                     VALUES ($1)
                      RETURNING employee_id`,
                     [hod.user_id]
                   );
@@ -559,8 +569,8 @@ export const GetHodsListService = async (Request) => {
                 let createResult;
                 try {
                   createResult = await database.query(
-                    `INSERT INTO employees (user_id, role)
-                     VALUES ($1, 'HOD')
+                    `INSERT INTO employees (user_id)
+                     VALUES ($1)
                      RETURNING employee_id`,
                     [hod.user_id]
                   );
@@ -829,6 +839,8 @@ export const GetAllUsersService = async (Request) => {
 export const UpdateEmployeeService = async (Request) => {
   const { userId } = Request.params;
   const { full_name, email, role, location, department, designation, hod_id, admin_id, phone_number } = Request.body;
+  const requestingUserRole = Request.Role?.toLowerCase() || '';
+  const isAdmin = requestingUserRole === 'admin';
 
   if (!userId) {
     throw CreateError("User ID is required", 400);
@@ -1388,24 +1400,26 @@ export const UpdateEmployeeService = async (Request) => {
     }
 
     // Handle admin_id assignment (for HODs)
-    // CRITICAL: Always process admin_id if it's provided in the request OR if role is HOD
+    // CRITICAL: Only admins can update admin_id. HOD users cannot modify admin assignments.
     let shouldUpdateAdminId = false;
     let adminEmployeeId = null;
     let finalAdminId = null; // Store final value for verification (declared at function scope)
     console.log(`\n🔵 ========== ADMIN ASSIGNMENT START ==========`);
     console.log(`🔵 User ID being updated: ${userId}`);
+    console.log(`🔵 Requesting user role: ${requestingUserRole} (isAdmin: ${isAdmin})`);
     console.log(`🔵 Received admin_id: ${admin_id} (type: ${typeof admin_id}, value: ${JSON.stringify(admin_id)})`);
     console.log(`🔵 Request body keys: ${Object.keys(Request.body).join(', ')}`);
     console.log(`🔵 Full request body: ${JSON.stringify(Request.body)}`);
     console.log(`🔵 Current role: ${normalizedRole || 'not provided'}`);
     console.log(`🔵 Final role: ${finalRole || 'not provided'}`);
     
-    // CRITICAL: If role is HOD, we MUST process admin_id (even if not explicitly provided)
-    // This ensures admin_id is always handled for HODs
+    // CRITICAL: Only process admin_id if:
+    // 1. The requesting user is an admin (only admins can assign admins to HODs)
+    // 2. AND admin_id is provided in the request OR the role being set is HOD
     const isHodRole = finalRole === 'hod' || normalizedRole?.toLowerCase() === 'hod';
     
-    // ALWAYS process admin_id if it's in the request body OR if role is HOD
-    if (admin_id !== undefined || isHodRole) {
+    // Only admins can update admin_id. HOD users should not be able to modify admin assignments.
+    if (isAdmin && (admin_id !== undefined || isHodRole)) {
       shouldUpdateAdminId = true;
       if (admin_id !== undefined) {
         console.log(`✅ admin_id is provided in request (value: ${admin_id}), will update`);
@@ -1710,8 +1724,8 @@ export const UpdateEmployeeService = async (Request) => {
           
           try {
             const createResult = await database.query(
-              `INSERT INTO employees (user_id, role, location, manager_id)
-               VALUES ($1, $2, $3, $4)
+              `INSERT INTO employees (user_id, location, manager_id)
+               VALUES ($1, $2, $3)
                ON CONFLICT (user_id) DO UPDATE SET
                  location = EXCLUDED.location,
                  manager_id = EXCLUDED.manager_id,
@@ -1719,7 +1733,6 @@ export const UpdateEmployeeService = async (Request) => {
                RETURNING employee_id, location, manager_id`,
               [
                 userId,
-                normalizedRole || 'employee',
                 normalizedLocation, // Use already normalized value
                 shouldUpdateManagerId ? hodEmployeeId : null
               ]
@@ -1748,11 +1761,10 @@ export const UpdateEmployeeService = async (Request) => {
             if (createError.code === '42704' || createError.message.includes('conflict')) {
               try {
                 await database.query(
-                  `INSERT INTO employees (user_id, role, location, manager_id)
-                   VALUES ($1, $2, $3, $4)`,
+                  `INSERT INTO employees (user_id, location, manager_id)
+                   VALUES ($1, $2, $3)`,
                   [
                     userId,
-                    normalizedRole || 'employee',
                     normalizedLocation, // Use already normalized value
                     shouldUpdateManagerId ? hodEmployeeId : null
                   ]
@@ -1801,10 +1813,9 @@ export const UpdateEmployeeService = async (Request) => {
             let insertResult;
             try {
               insertResult = await database.query(
-                `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-                 VALUES ($1, $2, $3, $4, $5, $6)
+                `INSERT INTO employees (user_id, location, team, designation, manager_id)
+                 VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT (user_id) DO UPDATE SET
-                   role = EXCLUDED.role,
                    location = EXCLUDED.location,
                    team = EXCLUDED.team,
                    designation = EXCLUDED.designation,
@@ -1812,7 +1823,6 @@ export const UpdateEmployeeService = async (Request) => {
                    updated_at = NOW()`,
                 [
                   userId,
-                  normalizedRole || 'employee',
                   normalizedLocation, // Use already normalized value
                   department || null,
                   designation || null,
@@ -1823,12 +1833,11 @@ export const UpdateEmployeeService = async (Request) => {
               if (noEmailError.code === '42703' || noEmailError.message.includes('column') || noEmailError.message.includes('email')) {
                 // email column doesn't exist, try without it (and without full_name)
                 await database.query(
-                  `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-                   VALUES ($1, $2, $3, $4, $5, $6)
+                  `INSERT INTO employees (user_id, location, team, designation, manager_id)
+                   VALUES ($1, $2, $3, $4, $5)
                    RETURNING employee_id`,
                   [
                     userId,
-                    normalizedRole || 'employee',
                     normalizedLocation, // Use already normalized value
                     department || null,
                     designation || null,
@@ -1851,11 +1860,10 @@ export const UpdateEmployeeService = async (Request) => {
                 // Location is ONLY from dropdown, not from phone number
                 
                 await database.query(
-                  `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-                   VALUES ($1, $2, $3, $4, $5, $6)`,
+                  `INSERT INTO employees (user_id, location, team, designation, manager_id)
+                   VALUES ($1, $2, $3, $4, $5)`,
                   [
                     userId,
-                    normalizedRole || 'employee',
                     normalizedLocation, // Use already normalized value
               department || null,
               designation || null,
@@ -1869,19 +1877,13 @@ export const UpdateEmployeeService = async (Request) => {
                   console.log('📝 Duplicate key detected, trying UPDATE instead...');
                   const updateResult = await database.query(
                     `UPDATE employees SET
-                     email = $1,
-                     full_name = $2,
-                     role = $3,
-                     location = $4,
-                     team = $5,
-                     designation = $6,
-                     manager_id = $7,
+                     location = $1,
+                     team = $2,
+                     designation = $3,
+                     manager_id = $4,
                      updated_at = NOW()
-                     WHERE user_id = $8`,
+                     WHERE user_id = $5`,
                     [
-                      email || '',
-                      full_name || '',
-                      normalizedRole || 'employee',
                       normalizedLocation || null,
                       department || null,
                       designation || null,
@@ -1975,10 +1977,9 @@ export const UpdateEmployeeService = async (Request) => {
           // Try INSERT without email (email column might not exist)
           try {
             await database.query(
-              `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-               VALUES ($1, $2, $3, $4, $5, $6)
+              `INSERT INTO employees (user_id, location, team, designation, manager_id)
+               VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (user_id) DO UPDATE SET
-               role = EXCLUDED.role,
                location = EXCLUDED.location,
                team = EXCLUDED.team,
                designation = EXCLUDED.designation,
@@ -1986,7 +1987,6 @@ export const UpdateEmployeeService = async (Request) => {
                  updated_at = NOW()`,
             [
               userId,
-                normalizedRole || 'employee',
                 normalizedLocation || null,
                 department || null,
                 designation || null,
@@ -1997,11 +1997,10 @@ export const UpdateEmployeeService = async (Request) => {
             if (noEmailError.code === '42703' || noEmailError.message.includes('column') || noEmailError.message.includes('email')) {
               // email column doesn't exist, try without it (and without full_name)
               await database.query(
-                `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-                 VALUES ($1, $2, $3, $4, $5, $6)`,
+                `INSERT INTO employees (user_id, location, team, designation, manager_id)
+                 VALUES ($1, $2, $3, $4, $5)`,
                 [
                   userId,
-                  normalizedRole || 'employee',
                   normalizedLocation || null,
                   department || null,
                   designation || null,
@@ -2020,11 +2019,10 @@ export const UpdateEmployeeService = async (Request) => {
               try {
                 // Try INSERT first (without email column)
                 await database.query(
-                  `INSERT INTO employees (user_id, role, location, team, designation, manager_id)
-                   VALUES ($1, $2, $3, $4, $5, $6)`,
+                  `INSERT INTO employees (user_id, location, team, designation, manager_id)
+                   VALUES ($1, $2, $3, $4, $5)`,
                   [
                     userId,
-                    normalizedRole || 'employee',
                     normalizedLocation || null,
                     department || null,
                     designation || null,
@@ -2038,19 +2036,13 @@ export const UpdateEmployeeService = async (Request) => {
                   console.log('📝 Duplicate detected, doing UPDATE instead...');
                   await database.query(
                     `UPDATE employees SET
-                     email = $1,
-                     full_name = $2,
-                     role = $3,
-                     location = $4,
-                     team = $5,
-                     designation = $6,
-                     manager_id = $7,
+                     location = $1,
+                     team = $2,
+                     designation = $3,
+                     manager_id = $4,
                      updated_at = NOW()
-                     WHERE user_id = $8`,
+                     WHERE user_id = $5`,
                     [
-              email || '',
-              full_name || '',
-              normalizedRole || 'employee',
               normalizedLocation || null,
               department || null,
               designation || null,
@@ -2198,20 +2190,20 @@ export const UpdateEmployeeService = async (Request) => {
                 let createResult;
                 try {
                   createResult = await database.query(
-                    `INSERT INTO employees (user_id, role, manager_id)
-                     VALUES ($1, $2, $3)
+                    `INSERT INTO employees (user_id, manager_id)
+                     VALUES ($1, $2)
                      RETURNING employee_id, manager_id`,
-                    [userId, normalizedRole || 'employee', hodEmployeeId]
+                    [userId, hodEmployeeId]
                   );
                 } catch (noEmailError) {
                   if (noEmailError.code === '42703' || noEmailError.message.includes('column')) {
                     // Some columns don't exist, try with minimal fields
                     try {
                       createResult = await database.query(
-                        `INSERT INTO employees (user_id, role, manager_id)
-                         VALUES ($1, $2, $3)
+                        `INSERT INTO employees (user_id, manager_id)
+                         VALUES ($1, $2)
                          RETURNING employee_id, manager_id`,
-                        [userId, normalizedRole || 'employee', hodEmployeeId]
+                        [userId, hodEmployeeId]
                       );
                     } catch (minError) {
                       // If even that fails, try with just user_id and manager_id
@@ -2283,8 +2275,29 @@ export const UpdateEmployeeService = async (Request) => {
     };
   } catch (error) {
     console.error('UpdateEmployeeService error:', error);
-    if (error.status) throw error;
-    throw CreateError("Failed to update employee", 500);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      stack: error.stack
+    });
+    
+    // If it's already a CreateError with status, throw it as-is
+    if (error.status) {
+      throw error;
+    }
+    
+    // For database errors, include the actual error message
+    if (error.code && error.code.startsWith('42')) {
+      throw CreateError(`Database error: ${error.message || 'Unknown database error'}`, 500);
+    } else if (error.code && error.code.startsWith('23')) {
+      throw CreateError(`Data integrity error: ${error.message || 'Unknown constraint error'}`, 400);
+    } else if (error.message) {
+      throw CreateError(`Failed to update employee: ${error.message}`, 500);
+    } else {
+      throw CreateError("Failed to update employee", 500);
+    }
   }
 };
 

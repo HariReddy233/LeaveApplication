@@ -1168,9 +1168,657 @@ HR Portal: ${hrPortalUrl || 'https://hrportal.consultare.io/'}
   }
 };
 
+/**
+ * Send Comp-Off Application Email to Approver (HOD/Admin)
+ * Comp-Off specific email template
+ */
+export const sendCompOffApplicationEmail = async ({
+  to,
+  approver_name,
+  employee_email,
+  employee_name,
+  start_date,
+  end_date,
+  number_of_days,
+  reason,
+  hod_status = null,
+  hod_name = null,
+  approvalToken = null,
+  baseUrl = null
+}) => {
+  try {
+    // Check if email is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.error('❌ EMAIL CONFIGURATION ERROR: SMTP_USER or SMTP_PASS missing in .env file');
+      throw new Error('Email not configured: SMTP_USER or SMTP_PASS missing');
+    }
+
+    if (!to) {
+      console.error('❌ EMAIL ERROR: Recipient email is missing');
+      throw new Error('Recipient email is missing');
+    }
+
+    const mailTransporter = getTransporter();
+
+    // Format dates
+    const startDate = new Date(start_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+    const endDate = new Date(end_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME || 'Consultare Leave Management'}" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
+      to: to,
+      subject: `Compensatory Off Application Pending Approval - ${employee_name}`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+              line-height: 1.6; 
+              color: #1f2937; 
+              background-color: #f3f4f6; 
+              padding: 20px;
+            }
+            .email-wrapper { 
+              max-width: 600px; 
+              margin: 0 auto; 
+              background: #ffffff;
+              border-radius: 12px;
+              overflow: hidden;
+              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            .content { 
+              padding: 20px 24px; 
+              background: #ffffff;
+            }
+            .comp-off-badge {
+              display: inline-block;
+              padding: 8px 16px;
+              border-radius: 6px;
+              color: white;
+              font-weight: 600;
+              font-size: 14px;
+              background: #f59e0b;
+              margin: 8px 0;
+              letter-spacing: 0.3px;
+            }
+            .info-card { 
+              background: #fffbeb; 
+              padding: 12px 16px; 
+              border-radius: 6px; 
+              margin: 12px 0; 
+              border-left: 3px solid #f59e0b;
+            }
+            .info-row {
+              display: flex;
+              padding: 8px 0;
+              border-bottom: 1px solid #e5e7eb;
+            }
+            .info-row:last-child {
+              border-bottom: none;
+            }
+            .info-label {
+              font-weight: 600;
+              color: #374151;
+              min-width: 140px;
+              font-size: 12px;
+            }
+            .info-value {
+              color: #6b7280;
+              font-size: 12px;
+              flex: 1;
+            }
+            .note-box {
+              background: #fef3c7;
+              border: 1px solid #fbbf24;
+              border-radius: 6px;
+              padding: 12px;
+              margin: 16px 0;
+            }
+            .note-text {
+              color: #92400e;
+              font-size: 12px;
+              line-height: 1.5;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="email-wrapper">
+            <div class="content">
+              <div class="comp-off-badge">COMPENSATORY OFF</div>
+              <div style="font-size: 14px; color: #374151; margin-bottom: 12px;">Dear ${approver_name || 'Approver'},</div>
+              
+              ${hod_status && hod_name ? `
+              <div style="background: ${hod_status === 'Approved' ? '#ecfdf5' : '#fef2f2'}; border-left: 3px solid ${hod_status === 'Approved' ? '#10b981' : '#ef4444'}; padding: 12px; border-radius: 6px; margin-bottom: 16px;">
+                <p style="font-size: 13px; color: #374151; margin: 0;">
+                  <strong>HOD Status:</strong> <span style="color: ${hod_status === 'Approved' ? '#059669' : '#dc2626'}; font-weight: 600;">${hod_status}</span> by <strong>${hod_name}</strong>
+                </p>
+              </div>
+              ` : ''}
+              
+              <p style="color: #374151; font-size: 13px; margin-bottom: 16px;">
+                A <strong>Compensatory Off</strong> application has been submitted and requires your review and approval.
+              </p>
+              
+              <div class="info-card">
+                <div style="font-weight: 600; color: #92400e; margin-bottom: 10px; font-size: 13px;">
+                  👤 Employee Information
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Name:</span>
+                  <span class="info-value">${employee_name || 'N/A'}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Email:</span>
+                  <span class="info-value">${employee_email || 'N/A'}</span>
+                </div>
+              </div>
+              
+              <div class="info-card">
+                <div style="font-weight: 600; color: #92400e; margin-bottom: 10px; font-size: 13px;">
+                  📅 Comp-Off Details
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Date(s) Worked:</span>
+                  <span class="info-value">${startDate} ${startDate !== endDate ? 'to ' + endDate : ''}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Comp-Off Days:</span>
+                  <span class="info-value">${number_of_days || 'N/A'} day${number_of_days !== 1 ? 's' : ''} (non-working days)</span>
+                </div>
+                ${reason ? `
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                  <div style="font-weight: 600; color: #374151; margin-bottom: 6px; font-size: 12px;">Reason:</div>
+                  <div style="color: #6b7280; font-size: 12px; line-height: 1.5;">${reason}</div>
+                </div>
+                ` : ''}
+              </div>
+              
+              <div class="note-box">
+                <p class="note-text">
+                  <strong>Note:</strong> Comp-Off is granted for working on non-working days (weekends or organization holidays). 
+                  Upon approval, the employee's leave balance will be increased accordingly.
+                </p>
+              </div>
+              
+              ${approvalToken ? `
+              <div style="margin: 24px 0; text-align: center;">
+                <a href="${baseUrl || 'http://localhost:3001'}/api/v1/Leave/email-action?token=${approvalToken}&action=approve" 
+                   style="display: inline-block; background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
+                  ✅ Approve
+                </a>
+                <a href="${baseUrl || 'http://localhost:3001'}/api/v1/Leave/email-action?token=${approvalToken}&action=reject" 
+                   style="display: inline-block; background-color: #ef4444; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 0 8px; font-size: 14px;">
+                  ❌ Reject
+                </a>
+              </div>
+              ` : `
+              <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px; margin: 16px 0; text-align: center;">
+                <p style="color: #1e40af; font-size: 12px; font-weight: 500;">
+                  ⚡ Please log in to the HR Portal to review and approve this Comp-Off application.
+                </p>
+              </div>
+              `}
+            </div>
+            <div style="text-align: center; padding: 24px; background: #f9fafb; border-top: 1px solid #e5e7eb;">
+              <p style="color: #9ca3af; font-size: 12px; line-height: 1.6;">
+                This is an automated notification from the Consultare Leave Management System.<br>
+                Please do not reply to this email.
+              </p>
+              <p style="margin-top: 12px;">
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none; font-weight: 600;">View in HR Portal</a>
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `Compensatory Off Application Pending Approval
+
+Dear ${approver_name || 'Approver'},
+
+A Compensatory Off application has been submitted and requires your review and approval.
+
+Employee: ${employee_name || 'N/A'}
+Email: ${employee_email || 'N/A'}
+Date(s) Worked: ${startDate} ${startDate !== endDate ? 'to ' + endDate : ''}
+Comp-Off Days: ${number_of_days || 'N/A'} days (non-working days)
+${reason ? `Reason: ${reason}` : ''}
+
+Note: Comp-Off is granted for working on non-working days. Upon approval, the employee's leave balance will be increased accordingly.
+
+Please log in to the HR Portal to review and approve this application.
+
+HR Portal: ${getHRPortalUrl()}
+
+This is an automated email. Please do not reply.
+© ${new Date().getFullYear()} Consultare Leave Management System`
+    };
+
+    const info = await mailTransporter.sendMail(mailOptions);
+    console.log(`✅ Comp-Off application email sent to ${to} - Message ID: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error('❌ Failed to send Comp-Off application email:', error.message);
+    throw error;
+  }
+};
+
+/**
+ * Send Comp-Off Approval Email to Employee
+ * Comp-Off specific approval email template
+ */
+export const sendCompOffApprovalEmail = async ({
+  employee_email,
+  employee_name,
+  start_date,
+  end_date,
+  number_of_days,
+  remark
+}, approverName = 'Admin') => {
+  try {
+    // Check if email is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('⚠️ Email not configured. SMTP_USER or SMTP_PASS missing in .env file');
+      return;
+    }
+
+    if (!employee_email) {
+      console.warn('⚠️ Cannot send email: employee email is missing');
+      return;
+    }
+
+    const mailTransporter = getTransporter();
+
+    // Format dates
+    const startDate = new Date(start_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+    const endDate = new Date(end_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME || 'Consultare Leave Management'}" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
+      to: employee_email,
+      subject: `Compensatory Off Approved - ${number_of_days} Day${number_of_days !== 1 ? 's' : ''}`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+              line-height: 1.6; 
+              color: #1f2937; 
+              background-color: #f3f4f6; 
+              padding: 20px;
+            }
+            .email-wrapper { 
+              max-width: 600px; 
+              margin: 0 auto; 
+              background: #ffffff;
+              border-radius: 12px;
+              overflow: hidden;
+              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            .content { 
+              padding: 20px 24px; 
+              background: #ffffff;
+            }
+            .success-badge {
+              display: inline-block;
+              padding: 8px 16px;
+              border-radius: 6px;
+              color: white;
+              font-weight: 600;
+              font-size: 14px;
+              background: #10b981;
+              margin: 8px 0;
+              letter-spacing: 0.3px;
+            }
+            .info-card { 
+              background: #f0fdf4; 
+              padding: 12px 16px; 
+              border-radius: 6px; 
+              margin: 12px 0; 
+              border-left: 3px solid #10b981;
+            }
+            .info-row {
+              display: flex;
+              padding: 8px 0;
+              border-bottom: 1px solid #e5e7eb;
+            }
+            .info-row:last-child {
+              border-bottom: none;
+            }
+            .info-label {
+              font-weight: 600;
+              color: #374151;
+              min-width: 140px;
+              font-size: 12px;
+            }
+            .info-value {
+              color: #6b7280;
+              font-size: 12px;
+              flex: 1;
+            }
+            .balance-notice {
+              background: #dbeafe;
+              border: 1px solid #3b82f6;
+              border-radius: 6px;
+              padding: 12px;
+              margin: 16px 0;
+            }
+            .balance-text {
+              color: #1e40af;
+              font-size: 12px;
+              line-height: 1.5;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="email-wrapper">
+            <div class="content">
+              <div class="success-badge">COMPENSATORY OFF APPROVED</div>
+              <div style="font-size: 14px; color: #374151; margin-bottom: 12px;">Dear ${employee_name || 'Employee'},</div>
+              
+              <p style="color: #374151; font-size: 14px; margin-bottom: 16px;">
+                Your <strong>Compensatory Off</strong> application has been <strong style="color: #10b981;">approved</strong> by <strong>${approverName}</strong>.
+              </p>
+              
+              <div class="info-card">
+                <div style="font-weight: 600; color: #059669; margin-bottom: 10px; font-size: 13px;">
+                  📅 Comp-Off Details
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Date(s) Worked:</span>
+                  <span class="info-value">${startDate} ${startDate !== endDate ? 'to ' + endDate : ''}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Comp-Off Days:</span>
+                  <span class="info-value">${number_of_days || 'N/A'} day${number_of_days !== 1 ? 's' : ''}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Approved by:</span>
+                  <span class="info-value">${approverName}</span>
+                </div>
+                ${remark ? `
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                  <div style="font-weight: 600; color: #374151; margin-bottom: 6px; font-size: 12px;">Remarks:</div>
+                  <div style="color: #6b7280; font-size: 12px; line-height: 1.5;">${remark}</div>
+                </div>
+                ` : ''}
+              </div>
+              
+              <div class="balance-notice">
+                <p class="balance-text">
+                  <strong>✅ Balance Updated:</strong> Your leave balance has been increased by <strong>${number_of_days} day${number_of_days !== 1 ? 's' : ''}</strong> 
+                  (Casual Leave for India / PTO for USA) as compensation for working on non-working days.
+                </p>
+              </div>
+              
+              <p style="color: #6b7280; font-size: 13px; margin-top: 20px; text-align: center;">
+                Please log in to the HR Portal to view your updated leave balance.
+              </p>
+            </div>
+            <div style="text-align: center; padding: 24px; background: #f9fafb; border-top: 1px solid #e5e7eb;">
+              <p style="color: #9ca3af; font-size: 12px; line-height: 1.6;">
+                This is an automated notification from the Consultare Leave Management System.<br>
+                Please do not reply to this email.
+              </p>
+              <p style="margin-top: 12px;">
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none; font-weight: 600;">View in HR Portal</a>
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `Compensatory Off Approved
+
+Dear ${employee_name || 'Employee'},
+
+Your Compensatory Off application has been approved by ${approverName}.
+
+Date(s) Worked: ${startDate} ${startDate !== endDate ? 'to ' + endDate : ''}
+Comp-Off Days: ${number_of_days || 'N/A'} days
+Approved by: ${approverName}
+${remark ? `Remarks: ${remark}` : ''}
+
+Balance Updated: Your leave balance has been increased by ${number_of_days} day${number_of_days !== 1 ? 's' : ''} (Casual Leave for India / PTO for USA).
+
+Please log in to the HR Portal to view your updated leave balance.
+
+HR Portal: ${getHRPortalUrl()}
+
+Thank you for using our Leave Management System.
+
+This is an automated email. Please do not reply.
+© ${new Date().getFullYear()} Consultare Leave Management System`
+    };
+
+    const info = await mailTransporter.sendMail(mailOptions);
+    console.log(`✅ Comp-Off approval email sent to ${employee_email} - Message ID: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`❌ Failed to send Comp-Off approval email:`, error.message);
+    throw error;
+  }
+};
+
+/**
+ * Send Comp-Off Rejection Email to Employee
+ * Comp-Off specific rejection email template
+ */
+export const sendCompOffRejectionEmail = async ({
+  employee_email,
+  employee_name,
+  start_date,
+  end_date,
+  number_of_days,
+  remark
+}, approverName = 'Admin') => {
+  try {
+    // Check if email is configured
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn('⚠️ Email not configured. SMTP_USER or SMTP_PASS missing in .env file');
+      return;
+    }
+
+    if (!employee_email) {
+      console.warn('⚠️ Cannot send email: employee email is missing');
+      return;
+    }
+
+    const mailTransporter = getTransporter();
+
+    // Format dates
+    const startDate = new Date(start_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+    const endDate = new Date(end_date).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME || 'Consultare Leave Management'}" <${process.env.EMAIL_FROM || process.env.SMTP_USER}>`,
+      to: employee_email,
+      subject: `Compensatory Off Rejected`,
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+              line-height: 1.6; 
+              color: #1f2937; 
+              background-color: #f3f4f6; 
+              padding: 20px;
+            }
+            .email-wrapper { 
+              max-width: 600px; 
+              margin: 0 auto; 
+              background: #ffffff;
+              border-radius: 12px;
+              overflow: hidden;
+              box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            }
+            .content { 
+              padding: 20px 24px; 
+              background: #ffffff;
+            }
+            .rejection-badge {
+              display: inline-block;
+              padding: 8px 16px;
+              border-radius: 6px;
+              color: white;
+              font-weight: 600;
+              font-size: 14px;
+              background: #ef4444;
+              margin: 8px 0;
+              letter-spacing: 0.3px;
+            }
+            .info-card { 
+              background: #fef2f2; 
+              padding: 12px 16px; 
+              border-radius: 6px; 
+              margin: 12px 0; 
+              border-left: 3px solid #ef4444;
+            }
+            .info-row {
+              display: flex;
+              padding: 8px 0;
+              border-bottom: 1px solid #e5e7eb;
+            }
+            .info-row:last-child {
+              border-bottom: none;
+            }
+            .info-label {
+              font-weight: 600;
+              color: #374151;
+              min-width: 140px;
+              font-size: 12px;
+            }
+            .info-value {
+              color: #6b7280;
+              font-size: 12px;
+              flex: 1;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="email-wrapper">
+            <div class="content">
+              <div class="rejection-badge">COMPENSATORY OFF REJECTED</div>
+              <div style="font-size: 14px; color: #374151; margin-bottom: 12px;">Dear ${employee_name || 'Employee'},</div>
+              
+              <p style="color: #374151; font-size: 14px; margin-bottom: 16px;">
+                Unfortunately, your <strong>Compensatory Off</strong> application has been <strong style="color: #ef4444;">rejected</strong> by <strong>${approverName}</strong>.
+              </p>
+              
+              <div class="info-card">
+                <div style="font-weight: 600; color: #dc2626; margin-bottom: 10px; font-size: 13px;">
+                  📅 Comp-Off Details
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Date(s) Worked:</span>
+                  <span class="info-value">${startDate} ${startDate !== endDate ? 'to ' + endDate : ''}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Comp-Off Days:</span>
+                  <span class="info-value">${number_of_days || 'N/A'} day${number_of_days !== 1 ? 's' : ''}</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Rejected by:</span>
+                  <span class="info-value">${approverName}</span>
+                </div>
+                ${remark ? `
+                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                  <div style="font-weight: 600; color: #374151; margin-bottom: 6px; font-size: 12px;">Remarks:</div>
+                  <div style="color: #6b7280; font-size: 12px; line-height: 1.5;">${remark}</div>
+                </div>
+                ` : ''}
+              </div>
+              
+              <p style="color: #6b7280; font-size: 13px; margin-top: 20px;">
+                Please contact your manager or HR for more details about this rejection.
+              </p>
+            </div>
+            <div style="text-align: center; padding: 24px; background: #f9fafb; border-top: 1px solid #e5e7eb;">
+              <p style="color: #9ca3af; font-size: 12px; line-height: 1.6;">
+                This is an automated notification from the Consultare Leave Management System.<br>
+                Please do not reply to this email.
+              </p>
+              <p style="margin-top: 12px;">
+                <a href="${getHRPortalUrl()}" style="color: #4f46e5; text-decoration: none; font-weight: 600;">View in HR Portal</a>
+              </p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `,
+      text: `Compensatory Off Rejected
+
+Dear ${employee_name || 'Employee'},
+
+Unfortunately, your Compensatory Off application has been rejected by ${approverName}.
+
+Date(s) Worked: ${startDate} ${startDate !== endDate ? 'to ' + endDate : ''}
+Comp-Off Days: ${number_of_days || 'N/A'} days
+Rejected by: ${approverName}
+${remark ? `Remarks: ${remark}` : ''}
+
+Please contact your manager or HR for more details about this rejection.
+
+HR Portal: ${getHRPortalUrl()}
+
+This is an automated email. Please do not reply.
+© ${new Date().getFullYear()} Consultare Leave Management System`
+    };
+
+    const info = await mailTransporter.sendMail(mailOptions);
+    console.log(`✅ Comp-Off rejection email sent to ${employee_email} - Message ID: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`❌ Failed to send Comp-Off rejection email:`, error.message);
+    throw error;
+  }
+};
+
 export default {
   sendLeaveApplicationEmail,
   sendLeaveApprovalEmail,
   sendPasswordResetOTPEmail,
-  sendHolidayReminderEmail
+  sendHolidayReminderEmail,
+  sendCompOffApplicationEmail,
+  sendCompOffApprovalEmail,
+  sendCompOffRejectionEmail
 };

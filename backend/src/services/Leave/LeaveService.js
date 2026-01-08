@@ -5,6 +5,149 @@ import sseService from "../SSE/SSEService.js";
 import { createApprovalToken, getBaseUrl } from "../../utils/approvalToken.js";
 
 /**
+ * Helper function to update Comp-Off balance (increase Casual Leave for India, PTO for USA)
+ * @param {number} employeeId - The employee ID
+ * @param {number} compOffDays - Number of Comp-Off days to add
+ * @param {string} employeeLocation - Employee location (India/IN or US/United States)
+ * @param {number} year - The year
+ */
+const updateCompOffBalance = async (employeeId, compOffDays, employeeLocation, year) => {
+  try {
+    // Map location to target leave type
+    let targetLeaveType = null;
+    const location = (employeeLocation || '').toString().trim();
+    const normalizedLocation = location.toLowerCase();
+    
+    if (normalizedLocation === 'india' || normalizedLocation === 'in') {
+      targetLeaveType = 'Casual Leave';
+    } else if (normalizedLocation === 'us' || normalizedLocation === 'usa' || normalizedLocation === 'united states' || 
+               normalizedLocation === 'u.s.' || normalizedLocation === 'u.s' || normalizedLocation.includes('miami')) {
+      targetLeaveType = 'PTO';
+    } else {
+      // Default to Casual Leave if location not recognized
+      console.warn(`⚠️ Unknown location "${location}", defaulting to Casual Leave for Comp-Off balance update`);
+      targetLeaveType = 'Casual Leave';
+    }
+    
+    if (!targetLeaveType) {
+      console.error(`❌ Cannot update Comp-Off balance: No target leave type for location "${location}"`);
+      return;
+    }
+    
+    // Get current balance for target leave type
+    const balanceCheck = await database.query(
+      `SELECT total_balance, used_balance, remaining_balance
+       FROM leave_balance
+       WHERE employee_id = $1 AND leave_type = $2 AND year = $3
+       LIMIT 1`,
+      [employeeId, targetLeaveType, year]
+    );
+    
+    let currentTotalBalance = 0;
+    let currentUsedBalance = 0;
+    
+    if (balanceCheck.rows.length > 0) {
+      currentTotalBalance = parseFloat(balanceCheck.rows[0].total_balance || 0);
+      currentUsedBalance = parseFloat(balanceCheck.rows[0].used_balance || 0);
+    } else {
+      // If no balance record exists, get default from leave_types
+      const leaveTypeResult = await database.query(
+        `SELECT max_days FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+        [targetLeaveType]
+      );
+      
+      if (leaveTypeResult.rows.length > 0) {
+        currentTotalBalance = parseFloat(leaveTypeResult.rows[0].max_days || 0);
+      }
+    }
+    
+    // Increase total_balance by compOffDays (Comp-Off adds to balance, not subtracts)
+    const newTotalBalance = currentTotalBalance + compOffDays;
+    
+    // Insert or update balance record
+    await database.query(
+      `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (employee_id, leave_type, year) 
+       DO UPDATE SET 
+         total_balance = $3,
+         used_balance = $4,
+         updated_at = NOW()`,
+      [employeeId, targetLeaveType, newTotalBalance, currentUsedBalance, year]
+    );
+    
+    console.log(`✅ Comp-Off balance updated: Added ${compOffDays} day(s) to ${targetLeaveType} for employee ${employeeId} (location: ${location})`);
+  } catch (error) {
+    console.error(`❌ Failed to update Comp-Off balance:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Helper function to revert Comp-Off balance (decrease Casual Leave for India, PTO for USA)
+ * @param {number} employeeId - The employee ID
+ * @param {number} compOffDays - Number of Comp-Off days to remove
+ * @param {string} employeeLocation - Employee location (India/IN or US/United States)
+ * @param {number} year - The year
+ */
+const revertCompOffBalance = async (employeeId, compOffDays, employeeLocation, year) => {
+  try {
+    // Map location to target leave type
+    let targetLeaveType = null;
+    const location = (employeeLocation || '').toString().trim();
+    
+    if (location === 'India' || location === 'IN') {
+      targetLeaveType = 'Casual Leave';
+    } else if (location === 'US' || location === 'United States') {
+      targetLeaveType = 'PTO';
+    } else {
+      // Default to Casual Leave if location not recognized
+      console.warn(`⚠️ Unknown location "${location}", defaulting to Casual Leave for Comp-Off balance revert`);
+      targetLeaveType = 'Casual Leave';
+    }
+    
+    if (!targetLeaveType) {
+      console.error(`❌ Cannot revert Comp-Off balance: No target leave type for location "${location}"`);
+      return;
+    }
+    
+    // Get current balance for target leave type
+    const balanceCheck = await database.query(
+      `SELECT total_balance, used_balance
+       FROM leave_balance
+       WHERE employee_id = $1 AND leave_type = $2 AND year = $3
+       LIMIT 1`,
+      [employeeId, targetLeaveType, year]
+    );
+    
+    if (balanceCheck.rows.length === 0) {
+      console.warn(`⚠️ No balance record found to revert Comp-Off for employee ${employeeId}, leave type ${targetLeaveType}`);
+      return;
+    }
+    
+    const currentTotalBalance = parseFloat(balanceCheck.rows[0].total_balance || 0);
+    const currentUsedBalance = parseFloat(balanceCheck.rows[0].used_balance || 0);
+    
+    // Decrease total_balance by compOffDays
+    const newTotalBalance = Math.max(0, currentTotalBalance - compOffDays);
+    
+    // Update balance record
+    await database.query(
+      `UPDATE leave_balance 
+       SET total_balance = $1,
+           updated_at = NOW()
+       WHERE employee_id = $2 AND leave_type = $3 AND year = $4`,
+      [newTotalBalance, employeeId, targetLeaveType, year]
+    );
+    
+    console.log(`✅ Comp-Off balance reverted: Removed ${compOffDays} day(s) from ${targetLeaveType} for employee ${employeeId} (location: ${location})`);
+  } catch (error) {
+    console.error(`❌ Failed to revert Comp-Off balance:`, error);
+    throw error;
+  }
+};
+
+/**
  * Helper function to recalculate leave balance based on current approved leaves
  * This ensures balance is always accurate by recalculating from source of truth
  * @param {number} employeeId - The employee ID
@@ -13,6 +156,30 @@ import { createApprovalToken, getBaseUrl } from "../../utils/approvalToken.js";
  */
 const recalculateLeaveBalance = async (employeeId, leaveType, year) => {
   try {
+    // IMPORTANT: Comp-Off should NEVER deduct balance (it only increases balance)
+    // If this is Comp-Off leave type, set used_balance to 0 and return early
+    const isCompOff = leaveType && leaveType.toLowerCase().trim() === 'compensatory off';
+    if (isCompOff) {
+      // Comp-Off balance should always have used_balance = 0 (it doesn't deduct balance)
+      const leaveTypeResult = await database.query(
+        `SELECT max_days FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
+        [leaveType]
+      );
+      const defaultBalance = leaveTypeResult.rows.length > 0 ? (leaveTypeResult.rows[0].max_days || 0) : 0;
+      
+      await database.query(
+        `INSERT INTO leave_balance (employee_id, leave_type, total_balance, used_balance, year)
+         VALUES ($1, $2, $3, 0, $4)
+         ON CONFLICT (employee_id, leave_type, year) 
+         DO UPDATE SET 
+           total_balance = COALESCE(leave_balance.total_balance, EXCLUDED.total_balance),
+           used_balance = 0,
+           updated_at = NOW()`,
+        [employeeId, leaveType, defaultBalance, year]
+      );
+      return; // Early return - Comp-Off doesn't deduct balance
+    }
+    
     // Get default total_balance from leave_types if balance doesn't exist
     const leaveTypeResult = await database.query(
       `SELECT max_days, code FROM leave_types WHERE name = $1 AND is_active = true LIMIT 1`,
@@ -31,6 +198,7 @@ const recalculateLeaveBalance = async (employeeId, leaveType, year) => {
     // - AND no approver has rejected (hod_status != 'Rejected' AND admin_status != 'Rejected')
     // This means: count if approved by ANY, but don't count if rejected by ANY
     // Handle NULL values properly - NULL means Pending, so treat as not approved/rejected
+    // IMPORTANT: Comp-Off leaves should NOT be counted in used_balance (they increase balance, not decrease)
     // Use date range instead of EXTRACT for better index usage
     const yearStart = `${year}-01-01`;
     const yearEnd = `${year}-12-31`;
@@ -39,6 +207,7 @@ const recalculateLeaveBalance = async (employeeId, leaveType, year) => {
        FROM leave_applications
        WHERE employee_id = $1 
        AND leave_type = $2
+       AND UPPER(TRIM(leave_type)) != 'COMPENSATORY OFF'
        AND start_date >= $3::date
        AND start_date <= $4::date
        AND (
@@ -106,27 +275,6 @@ export const CreateLeaveService = async (Request) => {
     }
   }
 
-  // ALWAYS calculate number of days excluding holidays and weekends
-  // Never use provided number_of_days - always recalculate to ensure accuracy
-  let numDays = 0;
-  try {
-    const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
-    numDays = await calculateLeaveDaysExcludingHolidays(start_date, end_date, employeeLocation, database);
-    
-    if (!numDays || numDays === 0) {
-      throw CreateError("Invalid date range: No working days found between start and end date. Please check if dates include only weekends/holidays.", 400);
-    }
-    console.log(`✅ Calculated ${numDays} working days (excluding holidays and weekends) for employee location: ${employeeLocation || 'N/A'}`);
-  } catch (calcError) {
-    // If it's already a CreateError, rethrow it
-    if (calcError.status || calcError.statusCode) {
-      throw calcError;
-    }
-    // For other errors, throw a descriptive error
-    console.error('❌ Failed to calculate working days:', calcError);
-    throw CreateError(`Failed to calculate working days: ${calcError.message}. Please ensure dates are valid and employee location is set.`, 400);
-  }
-
   // Validate leave type matches employee location
   // Handle case where location column might not exist
   let leaveTypeCheck;
@@ -163,6 +311,50 @@ export const CreateLeaveService = async (Request) => {
     }
   }
   // If location column doesn't exist or is null, treat as "IN" (India) - allow all
+
+  // Check if this is Comp-Off leave type (case-insensitive)
+  const isCompOff = leave_type && leave_type.toLowerCase().trim() === 'compensatory off';
+  
+  // Calculate number of days based on leave type
+  let numDays = 0;
+  
+  // For Comp-Off: Validate that ALL dates are non-working days (weekends or holidays)
+  if (isCompOff) {
+    const { validateCompOffDates } = await import('../../utils/helpers.js');
+    const compOffValidation = await validateCompOffDates(start_date, end_date, employeeLocation, database);
+    
+    if (!compOffValidation.isValid) {
+      const invalidDatesList = compOffValidation.invalidDates.join(', ');
+      throw CreateError(
+        `Comp-Off can only be applied on non-working days (weekends or location-specific holidays). The following dates are working days: ${invalidDatesList}. Please select only weekends or holidays for your location.`,
+        400
+      );
+    }
+    
+    // For Comp-Off, count only non-working days
+    numDays = compOffValidation.nonWorkingDays;
+    console.log(`✅ Comp-Off: Calculated ${numDays} non-working days (weekends + location-specific holidays) for employee location: ${employeeLocation || 'N/A'}`);
+  } else {
+    // For other leave types: ALWAYS calculate number of days excluding holidays and weekends
+    // Never use provided number_of_days - always recalculate to ensure accuracy
+    try {
+      const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
+      numDays = await calculateLeaveDaysExcludingHolidays(start_date, end_date, employeeLocation, database);
+      
+      if (!numDays || numDays === 0) {
+        throw CreateError("Invalid date range: No working days found between start and end date. Please check if dates include only weekends/holidays.", 400);
+      }
+      console.log(`✅ Calculated ${numDays} working days (excluding holidays and weekends) for employee location: ${employeeLocation || 'N/A'}`);
+    } catch (calcError) {
+      // If it's already a CreateError, rethrow it
+      if (calcError.status || calcError.statusCode) {
+        throw calcError;
+      }
+      // For other errors, throw a descriptive error
+      console.error('❌ Failed to calculate working days:', calcError);
+      throw CreateError(`Failed to calculate working days: ${calcError.message}. Please ensure dates are valid and employee location is set.`, 400);
+    }
+  }
 
   // Check for overlapping leave dates (only for pending or approved leaves)
   const overlapCheck = await database.query(
@@ -498,23 +690,45 @@ export const CreateLeaveService = async (Request) => {
             console.log(`✅ Token created for HOD ${hod.email}: ${token.substring(0, 10)}...`);
             console.log(`✅ Base URL for HOD email: ${baseUrl}`);
             // Send email asynchronously without blocking the response
-            sendLeaveApplicationEmail({
-              to: hod.email,
-              approver_name: hod.full_name,
-              employee_email: employee.employee_email,
-              employee_name: employee.employee_name,
-              leave_type: leave_type,
-              start_date: start_date,
-              end_date: end_date,
-              number_of_days: numDays,
-              reason: reason || leave_details || null,
-              approvalToken: token,
-              baseUrl: baseUrl
-            }).then(() => {
-              console.log(`✅ Email sent to HOD ${hod.email} with approval buttons`);
-            }).catch((emailErr) => {
-              console.error(`❌ Failed to send email to HOD ${hod.email}:`, emailErr.message);
-            });
+            // Use Comp-Off specific email if this is Comp-Off, otherwise use normal email
+            if (isCompOff) {
+              const { sendCompOffApplicationEmail } = await import('../../utils/emailService.js');
+              sendCompOffApplicationEmail({
+                to: hod.email,
+                approver_name: hod.full_name,
+                employee_email: employee.employee_email,
+                employee_name: employee.employee_name,
+                start_date: start_date,
+                end_date: end_date,
+                number_of_days: numDays,
+                reason: reason || leave_details || null,
+                approvalToken: token,
+                baseUrl: baseUrl
+              }).then(() => {
+                console.log(`✅ Comp-Off email sent to HOD ${hod.email} with approval buttons`);
+              }).catch((emailErr) => {
+                console.error(`❌ Failed to send Comp-Off email to HOD ${hod.email}:`, emailErr.message);
+              });
+            } else {
+              const { sendLeaveApplicationEmail } = await import('../../utils/emailService.js');
+              sendLeaveApplicationEmail({
+                to: hod.email,
+                approver_name: hod.full_name,
+                employee_email: employee.employee_email,
+                employee_name: employee.employee_name,
+                leave_type: leave_type,
+                start_date: start_date,
+                end_date: end_date,
+                number_of_days: numDays,
+                reason: reason || leave_details || null,
+                approvalToken: token,
+                baseUrl: baseUrl
+              }).then(() => {
+                console.log(`✅ Email sent to HOD ${hod.email} with approval buttons`);
+              }).catch((emailErr) => {
+                console.error(`❌ Failed to send email to HOD ${hod.email}:`, emailErr.message);
+              });
+            }
           } catch (tokenError) {
             console.error(`❌ CRITICAL: Failed to generate tokens for HOD ${hod.email}:`, tokenError.message);
             console.error(`❌ Token error stack:`, tokenError.stack);
@@ -562,23 +776,45 @@ export const CreateLeaveService = async (Request) => {
               console.log(`✅ Base URL for Admin email: ${baseUrl}`);
               console.log(`✅ Sending email to Admin with token: ${token ? 'YES' : 'NO'}`);
               // Send email asynchronously without blocking the response
-              sendLeaveApplicationEmail({
-                to: admin.email,
-                approver_name: admin.full_name,
-                employee_email: employee.employee_email,
-                employee_name: employee.employee_name,
-                leave_type: leave_type,
-                start_date: start_date,
-                end_date: end_date,
-                number_of_days: numDays,
-                reason: reason || leave_details || null,
-                approvalToken: token,
-                baseUrl: baseUrl
-              }).then(() => {
-                console.log(`✅ Email sent to Admin ${admin.email} with approval buttons`);
-              }).catch((adminEmailErr) => {
-                console.error(`❌ Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-              });
+              // Use Comp-Off specific email if this is Comp-Off, otherwise use normal email
+              if (isCompOff) {
+                const { sendCompOffApplicationEmail } = await import('../../utils/emailService.js');
+                sendCompOffApplicationEmail({
+                  to: admin.email,
+                  approver_name: admin.full_name,
+                  employee_email: employee.employee_email,
+                  employee_name: employee.employee_name,
+                  start_date: start_date,
+                  end_date: end_date,
+                  number_of_days: numDays,
+                  reason: reason || leave_details || null,
+                  approvalToken: token,
+                  baseUrl: baseUrl
+                }).then(() => {
+                  console.log(`✅ Comp-Off email sent to Admin ${admin.email} with approval buttons`);
+                }).catch((adminEmailErr) => {
+                  console.error(`❌ Failed to send Comp-Off email to Admin ${admin.email}:`, adminEmailErr.message);
+                });
+              } else {
+                const { sendLeaveApplicationEmail } = await import('../../utils/emailService.js');
+                sendLeaveApplicationEmail({
+                  to: admin.email,
+                  approver_name: admin.full_name,
+                  employee_email: employee.employee_email,
+                  employee_name: employee.employee_name,
+                  leave_type: leave_type,
+                  start_date: start_date,
+                  end_date: end_date,
+                  number_of_days: numDays,
+                  reason: reason || leave_details || null,
+                  approvalToken: token,
+                  baseUrl: baseUrl
+                }).then(() => {
+                  console.log(`✅ Email sent to Admin ${admin.email} with approval buttons`);
+                }).catch((adminEmailErr) => {
+                  console.error(`❌ Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+                });
+              }
             } catch (tokenError) {
               console.error(`❌ CRITICAL: Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
               console.error(`❌ Token error stack:`, tokenError.stack);
@@ -590,21 +826,41 @@ export const CreateLeaveService = async (Request) => {
                 approverEmail: admin.email
               });
               // Still send email but log the critical error
-              sendLeaveApplicationEmail({
-                to: admin.email,
-                approver_name: admin.full_name,
-                employee_email: employee.employee_email,
-                employee_name: employee.employee_name,
-                leave_type: leave_type,
-                start_date: start_date,
-                end_date: end_date,
-                number_of_days: numDays,
-                reason: reason || leave_details || null,
-                approvalToken: null, // Explicitly set to null so we know buttons won't appear
-                baseUrl: null
-              }).catch((adminEmailErr) => {
-                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-              });
+              // Use Comp-Off specific email if this is Comp-Off, otherwise use normal email
+              if (isCompOff) {
+                const { sendCompOffApplicationEmail } = await import('../../utils/emailService.js');
+                sendCompOffApplicationEmail({
+                  to: admin.email,
+                  approver_name: admin.full_name,
+                  employee_email: employee.employee_email,
+                  employee_name: employee.employee_name,
+                  start_date: start_date,
+                  end_date: end_date,
+                  number_of_days: numDays,
+                  reason: reason || leave_details || null,
+                  approvalToken: null,
+                  baseUrl: null
+                }).catch((adminEmailErr) => {
+                  console.error(`Failed to send Comp-Off email to Admin ${admin.email}:`, adminEmailErr.message);
+                });
+              } else {
+                const { sendLeaveApplicationEmail } = await import('../../utils/emailService.js');
+                sendLeaveApplicationEmail({
+                  to: admin.email,
+                  approver_name: admin.full_name,
+                  employee_email: employee.employee_email,
+                  employee_name: employee.employee_name,
+                  leave_type: leave_type,
+                  start_date: start_date,
+                  end_date: end_date,
+                  number_of_days: numDays,
+                  reason: reason || leave_details || null,
+                  approvalToken: null, // Explicitly set to null so we know buttons won't appear
+                  baseUrl: null
+                }).catch((adminEmailErr) => {
+                  console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+                });
+              }
             }
           }
         }
@@ -628,21 +884,41 @@ export const CreateLeaveService = async (Request) => {
               const token = await createApprovalToken(leave.id, admin.email, 'admin');
               const baseUrl = getBaseUrl();
               // Send email asynchronously without blocking the response
-              sendLeaveApplicationEmail({
-                to: admin.email,
-                approver_name: admin.full_name,
-                employee_email: employee.employee_email,
-                employee_name: employee.employee_name,
-                leave_type: leave_type,
-                start_date: start_date,
-                end_date: end_date,
-                number_of_days: numDays,
-                reason: reason || leave_details || null,
-                approvalToken: token,
-                baseUrl: baseUrl
-              }).catch((adminEmailErr) => {
-                console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
-              });
+              // Use Comp-Off specific email if this is Comp-Off, otherwise use normal email
+              if (isCompOff) {
+                const { sendCompOffApplicationEmail } = await import('../../utils/emailService.js');
+                sendCompOffApplicationEmail({
+                  to: admin.email,
+                  approver_name: admin.full_name,
+                  employee_email: employee.employee_email,
+                  employee_name: employee.employee_name,
+                  start_date: start_date,
+                  end_date: end_date,
+                  number_of_days: numDays,
+                  reason: reason || leave_details || null,
+                  approvalToken: token,
+                  baseUrl: baseUrl
+                }).catch((adminEmailErr) => {
+                  console.error(`Failed to send Comp-Off email to Admin ${admin.email}:`, adminEmailErr.message);
+                });
+              } else {
+                const { sendLeaveApplicationEmail } = await import('../../utils/emailService.js');
+                sendLeaveApplicationEmail({
+                  to: admin.email,
+                  approver_name: admin.full_name,
+                  employee_email: employee.employee_email,
+                  employee_name: employee.employee_name,
+                  leave_type: leave_type,
+                  start_date: start_date,
+                  end_date: end_date,
+                  number_of_days: numDays,
+                  reason: reason || leave_details || null,
+                  approvalToken: token,
+                  baseUrl: baseUrl
+                }).catch((adminEmailErr) => {
+                  console.error(`Failed to send email to Admin ${admin.email}:`, adminEmailErr.message);
+                });
+              }
             } catch (tokenError) {
               console.error(`Failed to generate tokens for Admin ${admin.email}:`, tokenError.message);
               // Send email without tokens as fallback
@@ -1108,6 +1384,10 @@ export const UpdateLeaveService = async (Request) => {
     paramCount++;
   }
   
+  // Determine final leave type (use updated value if provided, otherwise use existing)
+  const finalLeaveType = leave_type || leave.leave_type;
+  const isCompOff = finalLeaveType && finalLeaveType.toLowerCase().trim() === 'compensatory off';
+  
   // If start_date or end_date is being updated, recalculate number_of_days
   // Always recalculate to ensure working days are accurate (excluding weekends and holidays)
   if (start_date || end_date) {
@@ -1122,25 +1402,45 @@ export const UpdateLeaveService = async (Request) => {
     );
     const employeeLocation = empResult.rows[0]?.location || null;
     
-    // Recalculate working days
-    try {
-      const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
-      const recalculatedDays = await calculateLeaveDaysExcludingHolidays(finalStartDate, finalEndDate, employeeLocation, database);
+    // For Comp-Off: Validate that ALL dates are non-working days (weekends or holidays)
+    if (isCompOff) {
+      const { validateCompOffDates } = await import('../../utils/helpers.js');
+      const compOffValidation = await validateCompOffDates(finalStartDate, finalEndDate, employeeLocation, database);
       
-      if (!recalculatedDays || recalculatedDays === 0) {
-        throw CreateError("Invalid date range: No working days found between start and end date. Please check if dates include only weekends/holidays.", 400);
+      if (!compOffValidation.isValid) {
+        const invalidDatesList = compOffValidation.invalidDates.join(', ');
+        throw CreateError(
+          `Comp-Off can only be applied on non-working days (weekends or organization holidays). The following dates are working days: ${invalidDatesList}. Please select only weekends or holidays.`,
+          400
+        );
       }
       
+      // For Comp-Off, count only non-working days
       updates.push(`number_of_days = $${paramCount}`);
-      params.push(recalculatedDays);
+      params.push(compOffValidation.nonWorkingDays);
       paramCount++;
-      console.log(`✅ Recalculated ${recalculatedDays} working days for updated leave (excluding holidays and weekends)`);
-    } catch (calcError) {
-      if (calcError.status || calcError.statusCode) {
-        throw calcError;
+      console.log(`✅ Comp-Off: Recalculated ${compOffValidation.nonWorkingDays} non-working days (weekends + location-specific holidays) for updated leave`);
+    } else {
+      // For other leave types: Recalculate working days
+      try {
+        const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
+        const recalculatedDays = await calculateLeaveDaysExcludingHolidays(finalStartDate, finalEndDate, employeeLocation, database);
+        
+        if (!recalculatedDays || recalculatedDays === 0) {
+          throw CreateError("Invalid date range: No working days found between start and end date. Please check if dates include only weekends/holidays.", 400);
+        }
+        
+        updates.push(`number_of_days = $${paramCount}`);
+        params.push(recalculatedDays);
+        paramCount++;
+        console.log(`✅ Recalculated ${recalculatedDays} working days for updated leave (excluding holidays and weekends)`);
+      } catch (calcError) {
+        if (calcError.status || calcError.statusCode) {
+          throw calcError;
+        }
+        console.error('❌ Failed to recalculate working days:', calcError);
+        throw CreateError(`Failed to recalculate working days: ${calcError.message}`, 400);
       }
-      console.error('❌ Failed to recalculate working days:', calcError);
-      throw CreateError(`Failed to recalculate working days: ${calcError.message}`, 400);
     }
   } else if (number_of_days) {
     // If only number_of_days is provided without date changes, recalculate to ensure accuracy
@@ -1157,22 +1457,66 @@ export const UpdateLeaveService = async (Request) => {
     
     // Recalculate to ensure accuracy
     try {
-      const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
-      const recalculatedDays = await calculateLeaveDaysExcludingHolidays(finalStartDate, finalEndDate, employeeLocation, database);
-      
-      if (recalculatedDays > 0) {
-        updates.push(`number_of_days = $${paramCount}`);
-        params.push(recalculatedDays);
-        paramCount++;
-        console.log(`✅ Recalculated ${recalculatedDays} working days (excluding holidays and weekends)`);
+      if (isCompOff) {
+        const { validateCompOffDates } = await import('../../utils/helpers.js');
+        const compOffValidation = await validateCompOffDates(finalStartDate, finalEndDate, employeeLocation, database);
+        
+        if (compOffValidation.isValid && compOffValidation.nonWorkingDays > 0) {
+          updates.push(`number_of_days = $${paramCount}`);
+          params.push(compOffValidation.nonWorkingDays);
+          paramCount++;
+          console.log(`✅ Comp-Off: Recalculated ${compOffValidation.nonWorkingDays} non-working days (weekends + location-specific holidays)`);
+        } else {
+          console.warn('⚠️ Could not recalculate Comp-Off days, keeping existing value');
+        }
       } else {
-        // If recalculation fails, don't update number_of_days
-        console.warn('⚠️ Could not recalculate days, keeping existing value');
+        const { calculateLeaveDaysExcludingHolidays } = await import('../../utils/helpers.js');
+        const recalculatedDays = await calculateLeaveDaysExcludingHolidays(finalStartDate, finalEndDate, employeeLocation, database);
+        
+        if (recalculatedDays > 0) {
+          updates.push(`number_of_days = $${paramCount}`);
+          params.push(recalculatedDays);
+          paramCount++;
+          console.log(`✅ Recalculated ${recalculatedDays} working days (excluding holidays and weekends)`);
+        } else {
+          // If recalculation fails, don't update number_of_days
+          console.warn('⚠️ Could not recalculate days, keeping existing value');
+        }
       }
     } catch (calcError) {
       // On error, don't update number_of_days
       console.warn('⚠️ Could not recalculate days, keeping existing value:', calcError.message);
     }
+  } else if (leave_type && isCompOff) {
+    // If leave_type is being changed to Comp-Off, validate existing dates
+    const finalStartDate = leave.start_date;
+    const finalEndDate = leave.end_date;
+    const empId = leave.employee_id;
+    
+    // Get employee location
+    const empResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [empId]
+    );
+    const employeeLocation = empResult.rows[0]?.location || null;
+    
+    // Validate Comp-Off dates
+    const { validateCompOffDates } = await import('../../utils/helpers.js');
+    const compOffValidation = await validateCompOffDates(finalStartDate, finalEndDate, employeeLocation, database);
+    
+    if (!compOffValidation.isValid) {
+      const invalidDatesList = compOffValidation.invalidDates.join(', ');
+      throw CreateError(
+        `Comp-Off can only be applied on non-working days (weekends or location-specific holidays). The following dates are working days: ${invalidDatesList}. Please select only weekends or holidays for your location.`,
+        400
+      );
+    }
+    
+    // Update number_of_days to count only non-working days
+    updates.push(`number_of_days = $${paramCount}`);
+    params.push(compOffValidation.nonWorkingDays);
+    paramCount++;
+    console.log(`✅ Comp-Off: Updated number_of_days to ${compOffValidation.nonWorkingDays} non-working days (weekends + location-specific holidays)`);
   }
   
   if (reason !== undefined) {
@@ -1246,17 +1590,38 @@ export const DeleteLeaveService = async (Request) => {
   const leaveInfo = {
     employee_id: leave.employee_id,
     leave_type: leave.leave_type,
-    start_date: leave.start_date
+    start_date: leave.start_date,
+    number_of_days: leave.number_of_days
   };
+  
+  // Check if this is Comp-Off leave type
+  const isCompOff = leave.leave_type && leave.leave_type.toLowerCase().trim() === 'compensatory off';
+  
+  // Get employee location for Comp-Off balance revert
+  let employeeLocation = null;
+  if (isCompOff && hadApproval) {
+    const empLocResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [leave.employee_id]
+    );
+    if (empLocResult.rows.length > 0) {
+      employeeLocation = empLocResult.rows[0].location;
+    }
+  }
 
   const result = await database.query(
     'DELETE FROM leave_applications WHERE id = $1 RETURNING *',
     [id]
   );
 
-  // Recalculate leave balance after deletion if leave had any approval
-  // This ensures balance is accurate after deletion (leave is already deleted, so won't be counted)
-  if (isAdmin && hadApproval) {
+  // Handle Comp-Off balance revert or normal balance recalculation
+  if (isCompOff && hadApproval) {
+    // For Comp-Off: Revert the balance that was previously added
+    const year = new Date(leave.start_date).getFullYear();
+    await revertCompOffBalance(leave.employee_id, leave.number_of_days, employeeLocation, year);
+  } else if (hadApproval) {
+    // For other leave types: Recalculate leave balance after deletion if leave had any approval
+    // This ensures balance is accurate after deletion (leave is already deleted, so won't be counted)
     try {
       const year = new Date(leaveInfo.start_date).getFullYear();
       // Recalculate balance to reflect the deletion (deleted leave won't be in the sum)
@@ -1443,11 +1808,48 @@ export const ApproveLeaveHodService = async (Request) => {
     [finalStatus, id]
   );
 
-  // Recalculate leave balance based on current approval status
-  // Balance is updated if ANY approver approves, and reverted if all reject
-  // This ensures balance reflects the current state of all leaves
+  // Check if this is Comp-Off leave type
+  const isCompOff = leave.leave_type && leave.leave_type.toLowerCase().trim() === 'compensatory off';
+  
+  // Get employee location for Comp-Off balance update
+  let employeeLocation = null;
+  if (isCompOff) {
+    const empLocResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [leave.employee_id]
+    );
+    if (empLocResult.rows.length > 0) {
+      employeeLocation = empLocResult.rows[0].location;
+    }
+  }
+  
+  // Handle balance update/revert based on status change
   const year = new Date(leave.start_date).getFullYear();
-  await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
+  const oldFinalStatus = leave.status || 'Pending';
+  
+  if (isCompOff) {
+    // For Comp-Off: Update balance when approved, revert when rejected
+    // Comp-Off should NOT deduct balance, only INCREASE it
+    if (finalStatus === 'Approved' && oldFinalStatus !== 'Approved') {
+      // Final status changed to 'Approved' for the first time - INCREASE balance
+      await updateCompOffBalance(leave.employee_id, leave.number_of_days, employeeLocation, year);
+    } else if (finalStatus === 'Rejected' && oldFinalStatus === 'Approved') {
+      // Final status changed from 'Approved' to 'Rejected' - revert the balance increase
+      await revertCompOffBalance(leave.employee_id, leave.number_of_days, employeeLocation, year);
+    }
+    // If status didn't change (e.g., was already Approved and still Approved), don't update balance again
+  } else {
+    // For other leave types: Update balance ONLY when status changes
+    // Balance is deducted when status becomes APPROVED, reverted when REJECTED/CANCELLED
+    if (finalStatus === 'Approved' && oldFinalStatus !== 'Approved') {
+      // Status changed to APPROVED - recalculate balance (will include this leave in used_balance)
+      await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
+    } else if ((finalStatus === 'Rejected' || finalStatus === 'Cancelled') && oldFinalStatus === 'Approved') {
+      // Status changed from APPROVED to REJECTED/CANCELLED - recalculate balance (will exclude this leave)
+      await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
+    }
+    // If status didn't change, don't update balance
+  }
 
   // Get approver name
   let approverName = 'HOD';
@@ -1470,66 +1872,106 @@ export const ApproveLeaveHodService = async (Request) => {
   // Send email notification to employee (non-blocking)
   // Only send email if final status changed to Approved or Rejected (not if still Pending)
   if (finalStatus !== 'Pending') {
-    const { sendLeaveApprovalEmail } = await import('../../utils/emailService.js');
-    sendLeaveApprovalEmail({
-      employee_email: leave.employee_email,
-      employee_name: leave.employee_name,
-      leave_type: leave.leave_type,
-      start_date: leave.start_date,
-      end_date: leave.end_date,
-      number_of_days: leave.number_of_days,
-      status: finalStatus,
-      remark: comment
-    }, approverName)
-      .then(() => {
-        console.log(`✅ Approval email sent to employee: ${leave.employee_email}`);
-      })
-      .catch((emailError) => {
-        console.error('Email sending failed:', emailError);
-      });
-
-    // If approved, send organization-wide informational notification to all users (NOT approval emails)
-    if (finalStatus === 'Approved') {
-      try {
-        const { sendLeaveInfoNotificationEmail } = await import('../../utils/emailService.js');
-        
-        // Get all active users for organization-wide notification
-        const allUsersResult = await database.query(
-          `SELECT email, 
-           COALESCE(
-             NULLIF(TRIM(first_name || ' ' || last_name), ''),
-             first_name,
-             last_name,
-             email
-           ) as full_name
-           FROM users 
-           WHERE (status = 'Active' OR status IS NULL)
-           AND email != $1
-           LIMIT 100`,
-          [leave.employee_email]
-        );
-
-        // Send informational notification email to all users (non-blocking)
-        for (const user of allUsersResult.rows) {
-          if (user.email) {
-            sendLeaveInfoNotificationEmail({
-              to: user.email,
-              recipient_name: user.full_name,
-              employee_name: leave.employee_name,
-              leave_type: leave.leave_type,
-              start_date: leave.start_date,
-              end_date: leave.end_date,
-              number_of_days: leave.number_of_days,
-              approver_name: approverName
-            }).catch((emailErr) => {
-              console.error(`Failed to send org-wide info notification to ${user.email}:`, emailErr.message);
-            });
-          }
-        }
-      } catch (orgEmailError) {
-        console.error('Failed to send organization-wide notifications:', orgEmailError);
-        // Don't fail the approval if org-wide email fails
+    if (isCompOff) {
+      // Use Comp-Off specific email templates
+      const { sendCompOffApprovalEmail, sendCompOffRejectionEmail } = await import('../../utils/emailService.js');
+      if (finalStatus === 'Approved') {
+        sendCompOffApprovalEmail({
+          employee_email: leave.employee_email,
+          employee_name: leave.employee_name,
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          number_of_days: leave.number_of_days,
+          remark: comment
+        }, approverName)
+          .then(() => {
+            console.log(`✅ Comp-Off approval email sent to employee: ${leave.employee_email}`);
+          })
+          .catch((emailError) => {
+            console.error('Comp-Off approval email sending failed:', emailError);
+          });
+      } else if (finalStatus === 'Rejected') {
+        sendCompOffRejectionEmail({
+          employee_email: leave.employee_email,
+          employee_name: leave.employee_name,
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          number_of_days: leave.number_of_days,
+          remark: comment
+        }, approverName)
+          .then(() => {
+            console.log(`✅ Comp-Off rejection email sent to employee: ${leave.employee_email}`);
+          })
+          .catch((emailError) => {
+            console.error('Comp-Off rejection email sending failed:', emailError);
+          });
       }
+    } else {
+      // Use normal leave email templates
+      const { sendLeaveApprovalEmail } = await import('../../utils/emailService.js');
+      sendLeaveApprovalEmail({
+        employee_email: leave.employee_email,
+        employee_name: leave.employee_name,
+        leave_type: leave.leave_type,
+        start_date: leave.start_date,
+        end_date: leave.end_date,
+        number_of_days: leave.number_of_days,
+        status: finalStatus,
+        remark: comment
+      }, approverName)
+        .then(() => {
+          console.log(`✅ Approval email sent to employee: ${leave.employee_email}`);
+        })
+        .catch((emailError) => {
+          console.error('Email sending failed:', emailError);
+        });
+    }
+  }
+
+  // If approved, send organization-wide informational notification to all users (NOT approval emails)
+  if (finalStatus === 'Approved') {
+    try {
+      const { sendLeaveInfoNotificationEmail } = await import('../../utils/emailService.js');
+      
+      // Get all active employees for organization-wide notification
+      // Join with employees table to ensure we get all active employees
+      const allUsersResult = await database.query(
+        `SELECT DISTINCT u.email, 
+         COALESCE(
+           NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+           u.first_name,
+           u.last_name,
+           u.email
+         ) as full_name
+         FROM users u
+         LEFT JOIN employees e ON e.user_id = u.user_id
+         WHERE (u.status = 'Active' OR u.status IS NULL)
+         AND u.email IS NOT NULL
+         AND u.email != $1
+         ORDER BY u.email`,
+        [leave.employee_email]
+      );
+
+      // Send informational notification email to all users (non-blocking)
+      for (const user of allUsersResult.rows) {
+        if (user.email) {
+          sendLeaveInfoNotificationEmail({
+            to: user.email,
+            recipient_name: user.full_name,
+            employee_name: leave.employee_name,
+            leave_type: leave.leave_type,
+            start_date: leave.start_date,
+            end_date: leave.end_date,
+            number_of_days: leave.number_of_days,
+            approver_name: approverName
+          }).catch((emailErr) => {
+            console.error(`Failed to send org-wide info notification to ${user.email}:`, emailErr.message);
+          });
+        }
+      }
+    } catch (orgEmailError) {
+      console.error('Failed to send organization-wide notifications:', orgEmailError);
+      // Don't fail the approval if org-wide email fails
     }
   }
 
@@ -1737,11 +2179,48 @@ export const ApproveLeaveAdminService = async (Request) => {
     [finalStatus, id]
   );
 
-  // Recalculate leave balance based on current approval status
-  // Balance is updated if ANY approver approves, and reverted if all reject
-  // This ensures balance reflects the current state of all leaves
+  // Check if this is Comp-Off leave type
+  const isCompOff = leave.leave_type && leave.leave_type.toLowerCase().trim() === 'compensatory off';
+  
+  // Get employee location for Comp-Off balance update
+  let employeeLocation = null;
+  if (isCompOff) {
+    const empLocResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [leave.employee_id]
+    );
+    if (empLocResult.rows.length > 0) {
+      employeeLocation = empLocResult.rows[0].location;
+    }
+  }
+  
+  // Handle balance update/revert based on status change
   const year = new Date(leave.start_date).getFullYear();
-  await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
+  const oldFinalStatus = leave.status || 'Pending';
+  
+  if (isCompOff) {
+    // For Comp-Off: Update balance when approved, revert when rejected
+    // Comp-Off should NOT deduct balance, only INCREASE it
+    if (finalStatus === 'Approved' && oldFinalStatus !== 'Approved') {
+      // Final status changed to 'Approved' for the first time - INCREASE balance
+      await updateCompOffBalance(leave.employee_id, leave.number_of_days, employeeLocation, year);
+    } else if (finalStatus === 'Rejected' && oldFinalStatus === 'Approved') {
+      // Final status changed from 'Approved' to 'Rejected' - revert the balance increase
+      await revertCompOffBalance(leave.employee_id, leave.number_of_days, employeeLocation, year);
+    }
+    // If status didn't change (e.g., was already Approved and still Approved), don't update balance again
+  } else {
+    // For other leave types: Update balance ONLY when status changes
+    // Balance is deducted when status becomes APPROVED, reverted when REJECTED/CANCELLED
+    if (finalStatus === 'Approved' && oldFinalStatus !== 'Approved') {
+      // Status changed to APPROVED - recalculate balance (will include this leave in used_balance)
+      await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
+    } else if ((finalStatus === 'Rejected' || finalStatus === 'Cancelled') && oldFinalStatus === 'Approved') {
+      // Status changed from APPROVED to REJECTED/CANCELLED - recalculate balance (will exclude this leave)
+      await recalculateLeaveBalance(leave.employee_id, leave.leave_type, year);
+    }
+    // If status didn't change, don't update balance
+  }
 
   // Get approver name
   let approverName = 'Admin';
@@ -1764,66 +2243,107 @@ export const ApproveLeaveAdminService = async (Request) => {
   // Send email notification to employee (non-blocking)
   // Only send email if final status changed to Approved or Rejected (not if still Pending)
   if (finalStatus !== 'Pending') {
-    const { sendLeaveApprovalEmail } = await import('../../utils/emailService.js');
-    sendLeaveApprovalEmail({
-      employee_email: leave.employee_email,
-      employee_name: leave.employee_name,
-      leave_type: leave.leave_type,
-      start_date: leave.start_date,
-      end_date: leave.end_date,
-      number_of_days: leave.number_of_days,
-      status: finalStatus,
-      remark: comment
-    }, approverName)
-      .then(() => {
+    if (isCompOff) {
+      // Use Comp-Off specific email templates
+      const { sendCompOffApprovalEmail, sendCompOffRejectionEmail } = await import('../../utils/emailService.js');
+      if (finalStatus === 'Approved') {
+        sendCompOffApprovalEmail({
+          employee_email: leave.employee_email,
+          employee_name: leave.employee_name,
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          number_of_days: leave.number_of_days,
+          remark: comment
+        }, approverName)
+          .then(() => {
+            console.log(`✅ Comp-Off approval email sent to employee: ${leave.employee_email}`);
+          })
+          .catch((emailError) => {
+            console.error('Comp-Off approval email sending failed:', emailError);
+          });
+      } else if (finalStatus === 'Rejected') {
+        sendCompOffRejectionEmail({
+          employee_email: leave.employee_email,
+          employee_name: leave.employee_name,
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          number_of_days: leave.number_of_days,
+          remark: comment
+        }, approverName)
+          .then(() => {
+            console.log(`✅ Comp-Off rejection email sent to employee: ${leave.employee_email}`);
+          })
+          .catch((emailError) => {
+            console.error('Comp-Off rejection email sending failed:', emailError);
+          });
+      }
+    } else {
+      // Use normal leave email templates
+      const { sendLeaveApprovalEmail } = await import('../../utils/emailService.js');
+      sendLeaveApprovalEmail({
+        employee_email: leave.employee_email,
+        employee_name: leave.employee_name,
+        leave_type: leave.leave_type,
+        start_date: leave.start_date,
+        end_date: leave.end_date,
+        number_of_days: leave.number_of_days,
+        status: finalStatus,
+        remark: comment
+      }, approverName)
+        .then(() => {
         console.log(`✅ Approval email sent to employee: ${leave.employee_email}`);
       })
       .catch((emailError) => {
         console.error('Email sending failed:', emailError);
       });
+    }
+  }
 
-    // If approved, send organization-wide informational notification to all users (NOT approval emails)
-    if (finalStatus === 'Approved') {
-      try {
-        const { sendLeaveInfoNotificationEmail } = await import('../../utils/emailService.js');
-        
-        // Get all active users for organization-wide notification
-        const allUsersResult = await database.query(
-          `SELECT email, 
-           COALESCE(
-             NULLIF(TRIM(first_name || ' ' || last_name), ''),
-             first_name,
-             last_name,
-             email
-           ) as full_name
-           FROM users 
-           WHERE (status = 'Active' OR status IS NULL)
-           AND email != $1
-           LIMIT 100`,
-          [leave.employee_email]
-        );
+  // If approved, send organization-wide informational notification to all users (NOT approval emails)
+  // This applies to ALL approved leaves (including Comp-Off and normal leaves)
+  if (finalStatus === 'Approved') {
+    try {
+      const { sendLeaveInfoNotificationEmail } = await import('../../utils/emailService.js');
+      
+      // Get all active employees for organization-wide notification
+      // Join with employees table to ensure we get all active employees
+      const allUsersResult = await database.query(
+        `SELECT DISTINCT u.email, 
+         COALESCE(
+           NULLIF(TRIM(u.first_name || ' ' || u.last_name), ''),
+           u.first_name,
+           u.last_name,
+           u.email
+         ) as full_name
+         FROM users u
+         LEFT JOIN employees e ON e.user_id = u.user_id
+         WHERE (u.status = 'Active' OR u.status IS NULL)
+         AND u.email IS NOT NULL
+         AND u.email != $1
+         ORDER BY u.email`,
+        [leave.employee_email]
+      );
 
-        // Send informational notification email to all users (non-blocking)
-        for (const user of allUsersResult.rows) {
-          if (user.email) {
-            sendLeaveInfoNotificationEmail({
-              to: user.email,
-              recipient_name: user.full_name,
-              employee_name: leave.employee_name,
-              leave_type: leave.leave_type,
-              start_date: leave.start_date,
-              end_date: leave.end_date,
-              number_of_days: leave.number_of_days,
-              approver_name: approverName
-            }).catch((emailErr) => {
-              console.error(`Failed to send org-wide info notification to ${user.email}:`, emailErr.message);
-            });
-          }
+      // Send informational notification email to all users (non-blocking)
+      for (const user of allUsersResult.rows) {
+        if (user.email) {
+          sendLeaveInfoNotificationEmail({
+            to: user.email,
+            recipient_name: user.full_name,
+            employee_name: leave.employee_name,
+            leave_type: leave.leave_type,
+            start_date: leave.start_date,
+            end_date: leave.end_date,
+            number_of_days: leave.number_of_days,
+            approver_name: approverName
+          }).catch((emailErr) => {
+            console.error(`Failed to send org-wide info notification to ${user.email}:`, emailErr.message);
+          });
         }
-      } catch (orgEmailError) {
-        console.error('Failed to send organization-wide notifications:', orgEmailError);
-        // Don't fail the approval if org-wide email fails
       }
+    } catch (orgEmailError) {
+      console.error('Failed to send organization-wide notifications:', orgEmailError);
+      // Don't fail the approval if org-wide email fails
     }
   }
 
@@ -2198,6 +2718,57 @@ export const CalculateWorkingDaysService = async (Request) => {
     start_date: start_date,
     end_date: end_date,
     employee_location: employeeLocation
+  };
+};
+
+/**
+ * Calculate Comp-Off Days Service
+ * Returns the number of non-working days (weekends + location-specific holidays) between start_date and end_date
+ * This is specifically for Comp-Off leave type calculation
+ */
+export const CalculateCompOffDaysService = async (Request) => {
+  const { start_date, end_date } = Request.body || Request.query;
+  const UserId = Request.UserId;
+  const EmployeeId = Request.EmployeeId;
+
+  if (!start_date || !end_date) {
+    throw CreateError("start_date and end_date are required", 400);
+  }
+
+  // Get employee_id and location
+  let empId = EmployeeId;
+  let employeeLocation = null;
+  if (!empId) {
+    const empResult = await database.query(
+      'SELECT employee_id, location FROM employees WHERE user_id = $1 LIMIT 1',
+      [UserId]
+    );
+    if (empResult.rows.length > 0) {
+      empId = empResult.rows[0].employee_id;
+      employeeLocation = empResult.rows[0].location;
+    }
+  } else {
+    const empResult = await database.query(
+      'SELECT location FROM employees WHERE employee_id = $1 LIMIT 1',
+      [empId]
+    );
+    if (empResult.rows.length > 0) {
+      employeeLocation = empResult.rows[0].location;
+    }
+  }
+
+  // Calculate Comp-Off days (non-working days: weekends + location-specific holidays)
+  const { validateCompOffDates } = await import('../../utils/helpers.js');
+  const compOffValidation = await validateCompOffDates(start_date, end_date, employeeLocation, database);
+
+  // Return the number of non-working days (weekends + location-specific holidays)
+  return {
+    comp_off_days: compOffValidation.nonWorkingDays,
+    start_date: start_date,
+    end_date: end_date,
+    employee_location: employeeLocation,
+    valid_dates: compOffValidation.isValid,
+    invalid_dates: compOffValidation.invalidDates
   };
 };
 

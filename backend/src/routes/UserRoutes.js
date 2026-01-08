@@ -5,21 +5,22 @@ const UserRoutes = express.Router();
 //Internal Lib Import
 import UserControllers from "../controller/User/UserControllers.js";
 import { CheckEmployeeAuth, CheckAdminAuth } from "../middleware/CheckAuthLogin.js";
-import { CheckPermission } from "../middleware/CheckPermission.js";
+import { CheckPermission, CheckAdminOrPermission, CheckMultiplePermissions } from "../middleware/CheckPermission.js";
 
-//Employee List (Permission-based: employee.view)
+//Employee List (Permission-based: any employee permission - view, create, edit, or delete)
 UserRoutes.get(
   "/EmployeeList",
   CheckEmployeeAuth,
-  CheckPermission('employee.view'),
+  CheckMultiplePermissions(['employee.view', 'employee.create', 'employee.edit', 'employee.delete'], 'any'),
   UserControllers.EmployeeList,
 );
 
 //Employee List (HOD) - Keep for backward compatibility, but use permission check
+//Allow access with any employee permission (view, create, edit, or delete)
 UserRoutes.get(
   "/EmployeeListHod",
   CheckEmployeeAuth,
-  CheckPermission('employee.view'),
+  CheckMultiplePermissions(['employee.view', 'employee.create', 'employee.edit', 'employee.delete'], 'any'),
   UserControllers.EmployeeList,
 );
 
@@ -61,19 +62,19 @@ UserRoutes.patch(
   UserControllers.UpdateEmployee,
 );
 
-//Get All HODs (for HOD assignment dropdown) - Admin only
+//Get All HODs (for HOD assignment dropdown) - Admin or HOD with employee.edit permission
 UserRoutes.get(
   "/HodsList",
   CheckEmployeeAuth,
-  CheckAdminAuth,
+  CheckAdminOrPermission('employee.edit'),
   UserControllers.HodsList,
 );
 
-//Get All Admins (for Admin assignment dropdown) - Admin only
+//Get All Admins (for Admin assignment dropdown) - Admin or HOD with employee.create permission
 UserRoutes.get(
   "/AdminsList",
   CheckEmployeeAuth,
-  CheckAdminAuth,
+  CheckAdminOrPermission('employee.create'),
   UserControllers.AdminsList,
 );
 

@@ -42,9 +42,9 @@ export default function EditEmployeePage() {
     if (employeeId) {
       fetchEmployee();
       fetchDepartments();
-      // Only fetch HODs/Admins if user is admin and not editing self
-      // HODs don't need HODs/Admins lists for editing employees
-      if (isAdmin && !isAdminEditingSelf) {
+      // Fetch HODs/Admins if user is admin (or HOD with employee.edit permission) and not editing self
+      // HODs need these lists to see current assignments, even if they can't change them
+      if (!isAdminEditingSelf) {
         fetchHods();
         fetchAdmins();
       }
@@ -685,21 +685,21 @@ export default function EditEmployeePage() {
             )}
 
             {/* Admin Assignment - Only for HODs (Mandatory) */}
-            {/* Only show if user is admin (HODs don't need to assign Admins) */}
-            {(formData.role?.toLowerCase() === 'hod' || formData.role?.toLowerCase() === 'HOD') && !isAdminEditingSelf && isAdmin && (
+            {/* Show if role is HOD and user is admin (or HOD with employee.edit permission) and not editing self */}
+            {(formData.role?.toLowerCase() === 'hod' || formData.role?.toLowerCase() === 'HOD') && !isAdminEditingSelf && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label htmlFor="admin_id" className="block text-sm font-medium text-gray-700 mb-2">
-                    Assign Admin <span className="text-red-500">*</span>
+                    Assign Admin {isAdmin && <span className="text-red-500">*</span>}
                   </label>
                   <select
                     id="admin_id"
                     value={formData.admin_id}
                     onChange={(e) => setFormData({ ...formData, admin_id: e.target.value })}
-                    disabled={adminsLoading}
-                    required
+                    disabled={adminsLoading || !isAdmin}
+                    required={isAdmin}
                     className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
-                      adminsLoading ? 'bg-gray-100 cursor-not-allowed' : 'border-gray-300'
+                      adminsLoading || !isAdmin ? 'bg-gray-100 cursor-not-allowed' : 'border-gray-300'
                     }`}
                   >
                     <option value="">{adminsLoading ? 'Loading Admins...' : 'Select Admin'}</option>
@@ -717,7 +717,9 @@ export default function EditEmployeePage() {
                     )}
                   </select>
                   <p className="mt-1 text-xs text-gray-500">
-                    Select the Admin who will receive notifications when this HOD approves leaves (Required)
+                    {isAdmin 
+                      ? 'Select the Admin who will receive notifications when this HOD approves leaves (Required)'
+                      : 'Admin assignment can only be changed by Administrators'}
                   </p>
                 </div>
               </div>

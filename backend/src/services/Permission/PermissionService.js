@@ -385,17 +385,29 @@ export const CheckUserPermissionService = async (userId, permissionKey) => {
     
     // Check specific permission
     const result = await database.query(
-      `SELECT up.granted
+      `SELECT up.granted, p.permission_key, p.is_active, up.granted as user_granted
        FROM user_permissions up
        JOIN permissions p ON up.permission_id = p.permission_id
        WHERE up.user_id = $1 
-       AND p.permission_key = $2 
-       AND up.granted = TRUE 
-       AND p.is_active = TRUE`,
+       AND p.permission_key = $2`,
       [userId, permissionKey]
     );
     
-    return result.rows.length > 0;
+    // Log detailed permission check result
+    if (result.rows.length > 0) {
+      const perm = result.rows[0];
+      const hasPermission = perm.user_granted === true && perm.is_active === true;
+      console.log(`🔐 Permission check details for user ${userId}, permission ${permissionKey}:`, {
+        found: true,
+        granted: perm.user_granted,
+        is_active: perm.is_active,
+        hasPermission
+      });
+      return hasPermission;
+    } else {
+      console.log(`🔐 Permission check for user ${userId}, permission ${permissionKey}: NOT FOUND in user_permissions`);
+      return false;
+    }
   } catch (error) {
     console.error('CheckUserPermissionService error:', error);
     return false; // Fail closed - if error, deny access
@@ -468,6 +480,7 @@ export const InitializeRequiredPermissionsService = async () => {
       'leave.delete',
       'leave.approve',
       'leave.reject',
+      'leave.update_list',
       'employee.view',
       'employee.create',
       'employee.edit',
@@ -497,16 +510,52 @@ export const InitializeRequiredPermissionsService = async () => {
           .map(word => word.charAt(0).toUpperCase() + word.slice(1))
           .join(' ');
         
-        const result = await database.query(
-          `INSERT INTO permissions (permission_key, permission_name, description, is_active, created_at)
-           VALUES ($1, $2, $3, TRUE, NOW())
-           ON CONFLICT (permission_key) DO NOTHING
+        // Determine category based on permission key prefix
+        let category = 'GENERAL';
+        if (permissionKey.startsWith('leave.')) {
+          category = 'LEAVE';
+        } else if (permissionKey.startsWith('employee.')) {
+          category = 'EMPLOYEE';
+        } else if (permissionKey.startsWith('department.')) {
+          category = 'DEPARTMENT';
+        } else if (permissionKey.startsWith('leavetype.')) {
+          category = 'LEAVE TYPE';
+        } else if (permissionKey.startsWith('reports.')) {
+          category = 'REPORTS';
+        } else if (permissionKey.startsWith('permission.')) {
+          category = 'PERMISSIONS';
+        } else if (permissionKey.startsWith('dashboard.')) {
+          category = 'DASHBOARD';
+        }
+        
+        // Generate description based on permission key
+        let description = `Permission: ${permissionKey}`;
+        if (permissionKey === 'leave.update_list') {
+          description = 'View and manage update leave list (organization holidays and blocked dates)';
+        }
+        
+        // First try to insert, if it already exists, update it to ensure category and description are correct
+        let result = await database.query(
+          `INSERT INTO permissions (permission_key, permission_name, description, category, is_active, created_at)
+           VALUES ($1, $2, $3, $4, TRUE, NOW())
+           ON CONFLICT (permission_key) DO UPDATE
+           SET permission_name = EXCLUDED.permission_name,
+               description = EXCLUDED.description,
+               category = EXCLUDED.category,
+               is_active = TRUE
            RETURNING *`,
-          [permissionKey, permissionName, `Permission: ${permissionKey}`]
+          [permissionKey, permissionName, description, category]
         );
         
         if (result.rows.length > 0) {
-          created.push(permissionKey);
+          // Check if this was an insert or update
+          const wasInsert = result.rows[0].created_at && 
+            new Date(result.rows[0].created_at).getTime() > Date.now() - 1000; // Created within last second
+          if (wasInsert) {
+            created.push(permissionKey);
+          } else {
+            existing.push(permissionKey);
+          }
         } else {
           existing.push(permissionKey);
         }

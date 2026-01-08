@@ -5,13 +5,13 @@ const DepartmentRoutes = express.Router();
 //Internal Lib Import
 import DepartmentControllers from "../controller/Department/DepartmentControllers.js";
 import { CheckEmployeeAuth } from "../middleware/CheckAuthLogin.js";
-import { CheckPermission } from "../middleware/CheckPermission.js";
+import { CheckPermission, CheckMultiplePermissions } from "../middleware/CheckPermission.js";
 
-//Get Department List
+//Get Department List (Permission-based: any department permission - view, create, edit, or delete)
 DepartmentRoutes.get(
   "/DepartmentList",
   CheckEmployeeAuth,
-  CheckPermission('department.view'),
+  CheckMultiplePermissions(['department.view', 'department.create', 'department.edit', 'department.delete'], 'any'),
   DepartmentControllers.DepartmentList,
 );
 

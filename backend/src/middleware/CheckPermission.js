@@ -26,6 +26,9 @@ export const CheckPermission = (permissionKey) => {
       // Check if user has the required permission
       const hasPermission = await CheckUserPermissionService(userId, permissionKey);
       
+      // Log permission check for debugging
+      console.log(`🔐 Permission check for user ${userId}: ${permissionKey} = ${hasPermission ? 'GRANTED' : 'DENIED'}`);
+      
       if (!hasPermission) {
         throw CreateError(`Access denied. Required permission: ${permissionKey}`, 403);
       }

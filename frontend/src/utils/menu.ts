@@ -123,7 +123,8 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
     }
 
     // Employee
-    if (can(PermissionKeys.EMPLOYEE_VIEW) || can(PermissionKeys.EMPLOYEE_CREATE) || can(PermissionKeys.EMPLOYEE_EDIT)) {
+    // Show Employee menu if user has ANY employee permission (VIEW, CREATE, EDIT, or DELETE)
+    if (can(PermissionKeys.EMPLOYEE_VIEW) || can(PermissionKeys.EMPLOYEE_CREATE) || can(PermissionKeys.EMPLOYEE_EDIT) || can(PermissionKeys.EMPLOYEE_DELETE)) {
       const empChildren: MenuItem[] = [];
       if (can(PermissionKeys.EMPLOYEE_CREATE)) {
         empChildren.push({
@@ -134,7 +135,8 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
           icon: createIcon(Circle, 'w-4 h-4'),
         });
       }
-      if (can(PermissionKeys.EMPLOYEE_VIEW)) {
+      // Employee List should be visible if user has ANY employee permission (VIEW, CREATE, EDIT, or DELETE)
+      if (can(PermissionKeys.EMPLOYEE_VIEW) || can(PermissionKeys.EMPLOYEE_CREATE) || can(PermissionKeys.EMPLOYEE_EDIT) || can(PermissionKeys.EMPLOYEE_DELETE)) {
         empChildren.push({
           key: 'EmployeeList',
           label: 'Employee List',
@@ -306,7 +308,8 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
     }
 
     // Employee - check permissions (same as Admin)
-    if (can(PermissionKeys.EMPLOYEE_VIEW) || can(PermissionKeys.EMPLOYEE_CREATE) || can(PermissionKeys.EMPLOYEE_EDIT)) {
+    // Show Employee menu if user has ANY employee permission (VIEW, CREATE, EDIT, or DELETE)
+    if (can(PermissionKeys.EMPLOYEE_VIEW) || can(PermissionKeys.EMPLOYEE_CREATE) || can(PermissionKeys.EMPLOYEE_EDIT) || can(PermissionKeys.EMPLOYEE_DELETE)) {
       const hodEmpChildren: MenuItem[] = [];
       if (can(PermissionKeys.EMPLOYEE_CREATE)) {
         hodEmpChildren.push({
@@ -317,7 +320,8 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
           icon: createIcon(Circle, 'w-4 h-4'),
         });
       }
-      if (can(PermissionKeys.EMPLOYEE_VIEW)) {
+      // Employee List should be visible if user has ANY employee permission (VIEW, CREATE, EDIT, or DELETE)
+      if (can(PermissionKeys.EMPLOYEE_VIEW) || can(PermissionKeys.EMPLOYEE_CREATE) || can(PermissionKeys.EMPLOYEE_EDIT) || can(PermissionKeys.EMPLOYEE_DELETE)) {
         hodEmpChildren.push({
           key: 'EmployeeList',
           label: 'Employee List',
@@ -465,6 +469,17 @@ export const getMenuItems = (userRole?: string, userPermissions?: string[]): Men
         key: 'Calendar',
         label: 'Calendar',
         url: '/dashboard/calendar',
+        icon: createIcon(Calendar, 'w-5 h-5'),
+      });
+    }
+
+    // Update Leave List (Organization Holidays & Blocked Dates) - Employee with permission
+    // Employee needs leave.update_list permission to see this menu item
+    if (can(PermissionKeys.LEAVE_UPDATE_LIST)) {
+      employeeMenuItems.push({
+        key: 'UpdateLeaveList',
+        label: 'Update Leave List',
+        url: '/dashboard/update-leave-list',
         icon: createIcon(Calendar, 'w-5 h-5'),
       });
     }

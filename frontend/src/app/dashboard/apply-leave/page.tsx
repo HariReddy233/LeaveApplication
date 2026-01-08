@@ -216,42 +216,67 @@ export default function ApplyLeavePage() {
   };
 
   // Calculate working days excluding weekends and holidays
+  // For Comp-Off: Calculate non-working days (weekends + location-specific holidays)
   const calculateWorkingDays = async () => {
     if (formData.start_date && formData.end_date) {
       try {
-        // Call API to calculate working days (excludes weekends and holidays)
-        const response = await api.post('/Leave/CalculateWorkingDays', {
-          start_date: formData.start_date,
-          end_date: formData.end_date
-        });
+        // Check if this is Comp-Off leave type
+        const isCompOff = formData.leave_type && formData.leave_type.toLowerCase().trim() === 'compensatory off';
         
-        if (response.data?.working_days) {
-          setFormData({ ...formData, number_of_days: response.data.working_days.toString() });
+        if (isCompOff) {
+          // For Comp-Off: Calculate non-working days (weekends + location-specific holidays)
+          const response = await api.post('/Leave/CalculateCompOffDays', {
+            start_date: formData.start_date,
+            end_date: formData.end_date
+          });
+          
+          if (response.data?.comp_off_days !== undefined) {
+            setFormData({ ...formData, number_of_days: response.data.comp_off_days.toString() });
+          }
+        } else {
+          // For other leave types: Calculate working days (excludes weekends and holidays)
+          const response = await api.post('/Leave/CalculateWorkingDays', {
+            start_date: formData.start_date,
+            end_date: formData.end_date
+          });
+          
+          if (response.data?.working_days) {
+            setFormData({ ...formData, number_of_days: response.data.working_days.toString() });
+          }
         }
       } catch (err: any) {
         // If API fails, calculate excluding weekends only (fallback)
-        console.warn('Failed to calculate working days from API, using weekend exclusion only:', err);
+        console.warn('Failed to calculate days from API, using weekend exclusion only:', err);
         const start = new Date(formData.start_date);
         const end = new Date(formData.end_date);
-        let workingDays = 0;
+        const isCompOff = formData.leave_type && formData.leave_type.toLowerCase().trim() === 'compensatory off';
+        let days = 0;
         const currentDate = new Date(start);
         
         while (currentDate <= end) {
           const dayOfWeek = currentDate.getDay(); // 0 = Sunday, 6 = Saturday
-          if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-            workingDays++;
+          if (isCompOff) {
+            // For Comp-Off: Count weekends only (fallback - no holiday data)
+            if (dayOfWeek === 0 || dayOfWeek === 6) {
+              days++;
+            }
+          } else {
+            // For other leaves: Count working days only (exclude weekends)
+            if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+              days++;
+            }
           }
           currentDate.setDate(currentDate.getDate() + 1);
         }
         
-        setFormData({ ...formData, number_of_days: workingDays.toString() });
+        setFormData({ ...formData, number_of_days: days.toString() });
       }
     }
   };
 
   useEffect(() => {
     calculateWorkingDays();
-  }, [formData.start_date, formData.end_date]);
+  }, [formData.start_date, formData.end_date, formData.leave_type]);
 
   // Update selected leave balance when leave type changes
   useEffect(() => {
@@ -417,6 +442,10 @@ export default function ApplyLeavePage() {
                       number_of_days: '',
                       // leave_details is preserved
                     });
+                    // Clear all error messages when leave type changes
+                    setError('');
+                    setBalanceError('');
+                    setOverlapError('');
                   }}
                   required
                   disabled={isUpdate}
@@ -496,7 +525,13 @@ export default function ApplyLeavePage() {
                   id="start_date"
                   type="date"
                   value={formData.start_date}
-                  onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, start_date: e.target.value });
+                    // Clear all error messages when start date changes
+                    setError('');
+                    setBalanceError('');
+                    setOverlapError('');
+                  }}
                   required
                   min={new Date().toISOString().split('T')[0]}
                   className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
@@ -517,13 +552,22 @@ export default function ApplyLeavePage() {
                   id="end_date"
                   type="date"
                   value={formData.end_date}
-                  onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
+                  onChange={(e) => {
+                    const newEndDate = e.target.value;
+                    setFormData({ ...formData, end_date: newEndDate });
+                  }}
                   required
-                  min={formData.start_date || new Date().toISOString().split('T')[0]}
+                  min={formData.start_date ? formData.start_date : new Date().toISOString().split('T')[0]}
+                  disabled={!formData.start_date}
                   className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors outline-none text-sm ${
                     overlapError ? 'border-red-300 bg-red-50' : 'border-gray-300'
-                  }`}
+                  } ${!formData.start_date ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                 />
+                {!formData.start_date && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Please select a start date first
+                  </p>
+                )}
                 {overlapError && formData.end_date && (
                   <p className="mt-1 text-xs text-red-600">{overlapError}</p>
                 )}

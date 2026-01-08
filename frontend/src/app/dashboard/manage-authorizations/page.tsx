@@ -322,7 +322,8 @@ export default function ManageAuthorizationsPage() {
                     if (categoryLower === 'authorization' || 
                         categoryLower === 'department' || 
                         categoryLower === 'employee' ||
-                        categoryLower === 'permissions') {
+                        categoryLower === 'permissions' ||
+                        categoryLower === 'reports') {
                       return null; // Don't show this category at all
                     }
                     
@@ -357,13 +358,14 @@ export default function ManageAuthorizationsPage() {
                     if (category.toLowerCase() === 'leave') {
                       if (userRoleLower === 'employee') {
                         const key = perm.permission_key.toLowerCase();
-                        // Employees should only see: apply, edit_own, delete_own, view_own
+                        // Employees should see: apply, edit_own, delete_own, view_own, and update_list
                         return key.includes('apply') || 
                                key.includes('edit_own') || 
                                key.includes('delete_own') || 
-                               key.includes('view_own');
+                               key.includes('view_own') ||
+                               key === 'leave.update_list';
                       }
-                      // Admin and HOD can see all leave permissions
+                      // Admin and HOD can see all leave permissions (including update_list)
                       return true;
                     }
                     
@@ -394,11 +396,47 @@ export default function ManageAuthorizationsPage() {
                     return null;
                   }
                   
+                  // Check if all permissions in this category are selected
+                  const allSelected = filteredPerms.every(perm => userPermissions.has(perm.permission_id));
+                  const someSelected = filteredPerms.some(perm => userPermissions.has(perm.permission_id));
+                  
+                  // Handle "Select All" for this category
+                  const handleSelectAllCategory = () => {
+                    if (!selectedUser || selectedUser.role?.toLowerCase() === 'admin') return;
+                    
+                    const newPermissions = new Set(userPermissions);
+                    if (allSelected) {
+                      // Unselect all permissions in this category
+                      filteredPerms.forEach(perm => newPermissions.delete(perm.permission_id));
+                    } else {
+                      // Select all permissions in this category
+                      filteredPerms.forEach(perm => newPermissions.add(perm.permission_id));
+                    }
+                    setUserPermissions(newPermissions);
+                    setHasChanges(true);
+                  };
+                  
                   return (
                     <div key={category} className="border-b border-gray-200 pb-3 last:border-0">
-                      <h3 className="text-sm font-semibold text-gray-700 mb-2 uppercase tracking-wide">
-                        {category}
-                      </h3>
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+                          {category}
+                        </h3>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={handleSelectAllCategory}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                            ref={(input) => {
+                              if (input) {
+                                input.indeterminate = someSelected && !allSelected;
+                              }
+                            }}
+                          />
+                          <span className="text-xs text-gray-600 font-medium">Select All</span>
+                        </label>
+                      </div>
                       <div className="space-y-1">
                         {filteredPerms.map((perm) => {
                           const isChecked = userPermissions.has(perm.permission_id);

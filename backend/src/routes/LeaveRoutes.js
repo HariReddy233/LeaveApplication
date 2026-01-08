@@ -121,6 +121,18 @@ LeaveRoutes.get(
   LeaveControllers.CalculateWorkingDays,
 );
 
+//Calculate Comp-Off Days (non-working days: weekends + location-specific holidays)
+LeaveRoutes.post(
+  "/CalculateCompOffDays",
+  CheckEmployeeAuth,
+  LeaveControllers.CalculateCompOffDays,
+);
+LeaveRoutes.get(
+  "/CalculateCompOffDays",
+  CheckEmployeeAuth,
+  LeaveControllers.CalculateCompOffDays,
+);
+
 //Bulk Approve/Reject (Admin) - Requires leave.approve or leave.reject
 LeaveRoutes.post(
   "/BulkApprove",
