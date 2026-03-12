@@ -68,6 +68,23 @@ const LeaveListTable = ({
   const [allLeaves, setAllLeaves] = useState<any[]>([]);
   const [totalLeave, setTotalLeave] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [nowMs, setNowMs] = useState<number>(Date.now());
+
+  const formatCountdown = (deadline?: string | null) => {
+    if (!deadline) return 'N/A';
+    const deadlineMs = new Date(deadline).getTime();
+    const diff = deadlineMs - nowMs;
+    if (Number.isNaN(deadlineMs)) return 'N/A';
+    if (diff <= 0) return 'Expired';
+
+    const totalSeconds = Math.floor(diff / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
+      .toString()
+      .padStart(2, '0')}`;
+  };
 
   // Default canDelete function - Admin can delete any leave, others only pending
   const defaultCanDelete = (record: any) => {
@@ -111,6 +128,11 @@ const LeaveListTable = ({
   // Fetch current user first, then fetch users based on role
   useEffect(() => {
     fetchCurrentUser();
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
   }, []);
 
   // Fetch users after current user and role are loaded
@@ -687,6 +709,9 @@ const LeaveListTable = ({
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Hod Status</th>
                   )}
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Admin Status</th>
+                  {userRole?.toLowerCase() === 'admin' && (
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Auto-Approve</th>
+                  )}
                   {showActions && (
                     <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider border-b">Action</th>
                   )}
@@ -774,6 +799,21 @@ const LeaveListTable = ({
                             )}
                           </div>
                         </td>
+                        {userRole?.toLowerCase() === 'admin' && (
+                          <td className="px-4 py-3">
+                            {Boolean(record.auto_approved_by_system) ? (
+                              <span className="inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800">
+                                Auto-Approved (24h)
+                              </span>
+                            ) : (record.AdminStatus || record.admin_status) === 'Pending' ? (
+                              <span className="inline-flex rounded-full bg-yellow-100 px-2.5 py-1 text-xs font-medium text-yellow-800">
+                                {formatCountdown(record.admin_deadline || null)}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-500">-</span>
+                            )}
+                          </td>
+                        )}
                         {showActions && (
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
@@ -837,7 +877,7 @@ const LeaveListTable = ({
                   })
                 ) : (
                   <tr>
-                    <td colSpan={showActions ? (userRole?.toLowerCase() === 'admin' ? 6 : 7) : (userRole?.toLowerCase() === 'admin' ? 5 : 6)} className="px-4 py-8 text-center text-gray-500">
+                    <td colSpan={showActions ? (userRole?.toLowerCase() === 'admin' ? 7 : 7) : (userRole?.toLowerCase() === 'admin' ? 6 : 6)} className="px-4 py-8 text-center text-gray-500">
                       No leave applications found
                     </td>
                   </tr>

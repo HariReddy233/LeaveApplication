@@ -68,8 +68,6 @@ export const GetCalendarViewService = async (Request) => {
     LEFT JOIN employees admin_emp ON la.approved_by_admin = admin_emp.employee_id
     LEFT JOIN users admin_approver ON admin_emp.user_id = admin_approver.user_id
     WHERE (la.hod_status = 'Approved' OR la.admin_status = 'Approved')
-    AND la.hod_status != 'Rejected'
-    AND la.admin_status != 'Rejected'
   `;
   
   const params = [];

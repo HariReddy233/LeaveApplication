@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import database from './config/database.js';
+import { startAutoApproveJob } from './jobs/autoApproveJob.js';
 
 // Import routes
 import routes from './routes/index.js';
@@ -96,6 +97,10 @@ const server = app.listen(PORT, async () => {
   
   // Initialize required permissions dynamically
   await initializePermissions();
+
+  if ((process.env.AUTO_APPROVE_CRON_ENABLED || 'true').toLowerCase() !== 'false') {
+    startAutoApproveJob();
+  }
   
   // Signal PM2 that the server is ready
   if (process.send) {

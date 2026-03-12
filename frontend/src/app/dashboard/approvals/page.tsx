@@ -19,6 +19,23 @@ export default function ApprovalsPage() {
   const [bulkLoading, setBulkLoading] = useState(false);
 
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [nowMs, setNowMs] = useState<number>(Date.now());
+
+  const formatCountdown = (deadline?: string | null) => {
+    if (!deadline) return 'N/A';
+    const deadlineMs = new Date(deadline).getTime();
+    const diff = deadlineMs - nowMs;
+    if (Number.isNaN(deadlineMs)) return 'N/A';
+    if (diff <= 0) return 'Expired';
+
+    const totalSeconds = Math.floor(diff / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
+      .toString()
+      .padStart(2, '0')}`;
+  };
 
   const fetchUserRole = async () => {
     try {
@@ -163,6 +180,11 @@ export default function ApprovalsPage() {
 
   useEffect(() => {
     fetchUserRole();
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -407,6 +429,8 @@ export default function ApprovalsPage() {
           const hodStatus = (leave.hod_status || leave.HodStatus || 'Pending').toString().trim();
           const adminStatus = (leave.admin_status || leave.AdminStatus || 'Pending').toString().trim();
           const leaveType = leave.LeaveType || leave.leave_type || 'N/A';
+          const isAutoApproved = Boolean(leave.auto_approved_by_system);
+          const adminDeadline = leave.admin_deadline || null;
           
           // Only show Approve/Reject buttons if status is Pending for the current user's role
           // Hide buttons if already Approved or Rejected
@@ -458,6 +482,12 @@ export default function ApprovalsPage() {
                   </span>
                 )}
               </div>
+
+              {isAutoApproved && (
+                <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">
+                  Auto-Approved (Admin did not respond within 24h)
+                </div>
+              )}
 
               {/* Leave Details - Compact Grid */}
               <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
@@ -516,6 +546,12 @@ export default function ApprovalsPage() {
                   </span>
                 </div>
               </div>
+
+              {userRole === 'admin' && adminStatus.toLowerCase() === 'pending' && (
+                <div className="mb-3 rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 text-xs text-yellow-800">
+                  Auto-approval in: <span className="font-semibold">{formatCountdown(adminDeadline)}</span>
+                </div>
+              )}
 
               {/* Approval Buttons - Only show if status is Pending, hide if already Approved/Rejected */}
               {canApprove ? (

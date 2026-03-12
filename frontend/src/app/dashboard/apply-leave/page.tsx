@@ -26,6 +26,7 @@ export default function ApplyLeavePage() {
   const [balanceError, setBalanceError] = useState('');
   const [overlapError, setOverlapError] = useState('');
   const [blockedDates, setBlockedDates] = useState<string[]>([]);
+  const [leaveMeta, setLeaveMeta] = useState<any>(null);
 
   useEffect(() => {
     fetchLeaveTypes();
@@ -128,6 +129,7 @@ export default function ApplyLeavePage() {
       const response = await api.get(`/Leave/LeaveDetails/${leaveId}`);
       if (response.data?.data) {
         const leave = response.data.data;
+        setLeaveMeta(leave);
         setFormData({
           leave_type: leave.leave_type || '',
           start_date: leave.start_date || '',
@@ -416,6 +418,12 @@ export default function ApplyLeavePage() {
 
       <div className="card mt-6">
         <div className="p-6">
+          {isUpdate && Boolean(leaveMeta?.auto_approved_by_system) && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg mb-4 text-sm">
+              Auto-Approved (Admin did not respond within 24h)
+            </div>
+          )}
+
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
               {error}

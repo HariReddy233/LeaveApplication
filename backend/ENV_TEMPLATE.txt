@@ -17,9 +17,19 @@ SMTP_PASS=your-16-character-app-password
 
 # Sender email (usually same as SMTP_USER)
 EMAIL_FROM=your-email@gmail.com
+EMAIL_ORGANIZER=your-email@gmail.com
 
 # Sender name (what recipients will see)
 EMAIL_FROM_NAME=Consultare Leave Management
+
+# Optional aliases (supported by new mail config)
+EMAIL_HOST=smtp.office365.com
+EMAIL_PORT=587
+EMAIL_USER=your-email@company.com
+EMAIL_PASSWORD=your-email-password
+
+# Auto-approve scheduler toggle
+AUTO_APPROVE_CRON_ENABLED=true
 
 # ============================================
 # DATABASE CONFIGURATION (if needed)
